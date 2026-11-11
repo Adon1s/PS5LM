@@ -488,6 +488,12 @@ void StatsCollector::run() {
                 live_.gen_tps = dgen > 0.05 ? (float) ((tokens - last_tokens) / dgen) : 0.0f;
             }
             live_.ctx_used = (uint32_t) (json_int(slots, "n_prompt_tokens") + json_int(slots, "n_decoded"));
+            // The context the server actually has (PS5LM Lean). Only the
+            // planner set it before, so a model loaded from app-args.txt
+            // showed "of 0k".
+            if (const long n_ctx = json_int(slots, "n_ctx"); n_ctx > 0) {
+                live_.ctx = (uint32_t) n_ctx;
+            }
             // The server's counters move only when a request ends, so during a
             // long reply the speed comes from the slot's decoded count.
             const double decoded = (double) json_int(slots, "n_decoded");

@@ -20,6 +20,8 @@ What is changed, newest last:
   model's folder with the same `general.base_model.0.repo_url` or `general.basename` (Unsloth's `mmproj-F16.gguf`
   pairs with every Qwen3.8-27B build, no rename). The name rule still comes first; of several matches the largest
   file wins. Choosing a model in the library renames `app-args.txt` to `app-args.off.txt` instead of deleting it.
+- 2026-11-11: the Home screen's context size comes from the server (`/slots` `n_ctx`), so a model loaded from
+  `app-args.txt` no longer shows "of 0k".
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
