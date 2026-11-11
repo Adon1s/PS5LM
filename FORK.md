@@ -60,6 +60,10 @@ What is changed, newest last:
   the new buffer was cut from the largest free block and the old one left a hole. Measured from the PC on lean.10
   (one such image first, then 25 photos): largest block after 25 photos 1,364 -> 1,586 MiB, and no steps at photos
   15 and 23. `off` in `/data/PS5LM/warmup.txt` turns it off. Host test: `vision_warmup_test.cpp`.
+  On the console (lean.11, Qwen3.8-27B UD-Q2_K_XL + F16 projector, full-size photos, screen off): ready with 888 MiB
+  free (largest block), warm-up 11.6 s, then 434 MiB through 25 photos with no step; on lean.10 with the same image
+  sent from the PC, 125 photos ran with 0 errors at a median 12.0 s, largest block 490 -> 466 MiB, all free 638 ->
+  618 MiB.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
