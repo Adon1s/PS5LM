@@ -24,6 +24,9 @@ What is changed, newest last:
   display in place, no restart, and logs the memory before and after. With no screen, holding Triangle for 2 s
   writes `on` and restarts with the screen. The PC can do the same with a request file `screen` holding `off`,
   `off-now` or `on`.
+  Measured: restart 1.80 GiB free when ready; in place, all free memory 1.46 -> 1.80 GiB but the largest block stays
+  1.45 (the screen's memory comes back as separate blocks beside the loaded model).
+- 2026-11-11: memory lines also give all free direct memory and its block count, not only the largest block.
 - 2026-11-11: a projector pairs by its GGUF header when its name does not: a `general.type` `mmproj` file in the
   model's folder with the same `general.base_model.0.repo_url` or `general.basename` (Unsloth's `mmproj-F16.gguf`
   pairs with every Qwen3.8-27B build, no rename). The name rule still comes first; of several matches the largest
