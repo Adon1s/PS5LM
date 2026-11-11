@@ -36,6 +36,21 @@ What is changed, newest last:
 - 2026-11-11: the planner gives vision models with a causal projector (Qwen's) `-ub 256`, `-b 1280` and
   `--image-max-tokens 1280` instead of the 2048 ubatch, keeping 0.5 GiB of headroom for photos. On the console that
   ubatch alone freed 0.57 GiB (0.90 -> 1.47 GiB free at load) at the same speed and answers. Other projectors keep 2048.
+- 2026-11-11: the log sink's review fixes from cobanov/PS5LM#72: a `puts` line goes into the ring whole, a drop is
+  always noted, and bytes storage refused count as refused, not written (the memory line says so).
+- 2026-11-11: the title heap hands memory back (`patches/sdk`, `ps5/app/heap_info.cpp`). The heap is the payload
+  SDK's (`mihawk-99/PS5_PayloadSDK`, pinned at `b83202be`): dlmalloc in eight arenas over direct memory. At the pin
+  it maps its segments back to back, dlmalloc joins them, and a joined segment can only go back whole, so one block
+  left near its end keeps everything below it. `patches/sdk` are four later commits of that fork, by its author,
+  path-filtered to the heap: `8278ca5e` (calloc clears recycled memory), `3752be7e` (arena locks sleep instead of
+  spin), `9d048784` (2 MiB segments) and `55a2de04` (a 64 KiB gap between mappings so segments never join,
+  `ps5_heap_trim`, and the heap's in-use figure). `scripts/build-app.sh` exports the pin, applies them, and links
+  the two heap objects ahead of the SDK's archive (the pinned checkout and the SDK cache stay as pinned);
+  `scripts/test-native-build.sh` runs the SDK's host tests on the patched copy and records the patches' hashes.
+  The app trims the heap 0.25 s after each request and every 10 s. Request files: `trim` (now, `on`, `off`) and
+  `memory each` / `memory off`; the memory line ends with exact MiB, the heap's in-use and its segments.
+  `/data/PS5LM/heap.txt` (MiB) sets the size from which a block gets a mapping of its own. Drop `patches/sdk` once
+  PS5LM pins an SDK at or past `55a2de04`; the app still builds against a stock SDK, without the trim.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add

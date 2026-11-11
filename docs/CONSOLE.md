@@ -163,6 +163,16 @@ from a drive instead of holding them in memory (Qwen3.8-Flash-Next on the roadma
 | `bench-memory` | The direct pool and what the system keeps of a nominal 12 GiB, its largest free block, the flexible pool; with no model loaded, also the largest block that allocates and maps, given back at once |
 | `bench-write` | Write speed by method to the data folder and a USB drive |
 | `memory` | One `memory asked` line: pools, CPU heap and ggml's devices |
+| `memory each` / `memory off` | PS5LM Lean: a `memory after a request` line after every request, and `memory after the trim` after its heap trim; or no more |
+| `trim` | PS5LM Lean: trims the heap now, between a `memory before trim` and a `memory after trim` line |
+| `trim on` / `trim off` | PS5LM Lean: the heap trim 0.25 s after each request and every 10 s (on by default with `patches/sdk`) |
+
+PS5LM Lean's memory line ends with exact figures, for example `[MiB: largest 1843, all free 1864 in 14 blocks, heap
+973 in 412 segments, in use 920, walk 2.1 ms, trim 0.4 ms, arenas 8, libc fallbacks 0, requests 12, in flight 0]`:
+the largest free block of the direct pool, all of it free and in how many blocks, the CPU heap's mapped direct memory
+and in how many segments, what of it is in blocks handed out (with `patches/sdk`), and llama-server's POST requests
+ended and in flight. `/data/PS5LM/heap.txt` holding a number of MiB sets, at start, the size from which a heap block
+gets a mapping of its own, given back the moment it is freed (the SDK's is 32).
 
 Point `bench-read` at a model of several GiB on the drive in question (internal storage, the M.2
 drive or USB), so the cache holds little of it; the `O_DIRECT` lines are the drive itself.

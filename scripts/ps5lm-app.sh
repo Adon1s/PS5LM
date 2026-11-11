@@ -12,6 +12,9 @@
 #   scripts/ps5lm-app.sh fetch <url>         probe: download over HTTPS (system TLS), see app.log
 #   scripts/ps5lm-app.sh bench-write         probe: write speed by method, see app.log
 #   scripts/ps5lm-app.sh memory              log the memory pools now, see app.log
+#   scripts/ps5lm-app.sh memory each|off     PS5LM Lean: a memory line after every request and its heap trim, or no more
+#   scripts/ps5lm-app.sh trim [on|off]       PS5LM Lean: trim the heap now (memory lines before and after), or turn the
+#                                            trim after each request and every 10 s on or off
 #   scripts/ps5lm-app.sh bench-read <file>   probe: sequential and random read speed of a model file, see app.log
 #   scripts/ps5lm-app.sh bench-memory        probe: the pools and the largest block that allocates, see app.log
 #   scripts/ps5lm-app.sh search <words>      search Get models from the PC
@@ -80,7 +83,8 @@ case ${1:-} in
     unload) request unload ;;
     fetch) request fetch "${2:?https URL}" ;;
     bench-write) request bench-write ;;
-    memory) request memory ;;
+    memory) request memory "${2:--}" ;;
+    trim) request trim "${2:--}" ;;
     bench-read) request bench-read "${2:?a model file on the console, several GiB}" ;;
     bench-memory) request bench-memory ;;
     search) request search "${2:?search words}" ;;
@@ -90,5 +94,5 @@ case ${1:-} in
     deploy) deploy ;;
     launch) launch ;;
     cycle) close; deploy; launch ;;
-    *) echo "usage: $0 close|deploy|launch|cycle|screenshot|load|unload|press|fetch|bench-write|bench-read|bench-memory|memory|search" >&2; exit 2 ;;
+    *) echo "usage: $0 close|deploy|launch|cycle|screenshot|load|unload|press|fetch|bench-write|bench-read|bench-memory|memory|trim|search" >&2; exit 2 ;;
 esac
