@@ -63,6 +63,7 @@
 #include "version.hpp"
 
 #include "heap_info.hpp"
+#include "vision_warmup.hpp"
 #include <ps5platform/kernel.h>
 
 #include "audio/mixer.hpp"
@@ -1247,7 +1248,7 @@ int main(int, char **) {
     // PS5LM Lean: the heap trim (heap_info.hpp), on by default where the heap
     // can; the PC's request file "trim" turns it off and on, "memory each" adds
     // a memory line after every request and after its trim.
-    bool     trim_on = ps5lm::heap_can_trim(), memory_each = false;
+    bool     trim_on = ps5lm::heap_can_trim(), memory_each = false, warmup_started = false;
     uint64_t trim_seen = 0;
     int64_t  trim_due = 0, last_trim = last;
     for (uint64_t n = 0;; ++n) {
@@ -1276,6 +1277,17 @@ int main(int, char **) {
         if (serving && !was_serving) {
             notify(live.decision.empty() ? "PS5LM: ready, chat in a browser on this network" : "PS5LM: ready for decisions at /v1/systemone");
             log_memory("when ready");  // the weights, the cache and the compute buffers are all allocated by now
+            // PS5LM Lean: the vision encoder's buffers sized once, at the cap (vision_warmup.hpp).
+            if (!warmup_started) {
+                warmup_started = true;
+                if (ps5lm::vision_warmup_start(kPort, g_server_args, data_path("warmup.txt"))) {
+                    ps5lm::log_line("vision warm-up: one image at the image-token cap\n");
+                }
+            }
+        }
+        if (std::string warmed; ps5lm::vision_warmup_finished(warmed)) {
+            ps5lm::log_line("%s\n", warmed.c_str());
+            log_memory("after the warm-up");
         }
         was_serving = serving;
         // Once a second while a model loads, where the memory goes (PS5LM

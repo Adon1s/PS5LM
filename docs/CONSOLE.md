@@ -174,6 +174,10 @@ and in how many segments, what of it is in blocks handed out (with `patches/sdk`
 ended and in flight. `/data/PS5LM/heap.txt` holding a number of MiB sets, at start, the size from which a heap block
 gets a mapping of its own, given back the moment it is freed (the SDK's is 32).
 
+With a projector and `--image-max-tokens`, PS5LM Lean sends its own server one image at the cap once the model is
+ready (`vision warm-up: ...` and `memory after the warm-up` in `app.log`), so the vision encoder's GPU buffers are
+allocated once at their largest instead of growing photo by photo. `off` in `/data/PS5LM/warmup.txt` skips it.
+
 Point `bench-read` at a model of several GiB on the drive in question (internal storage, the M.2
 drive or USB), so the cache holds little of it; the `O_DIRECT` lines are the drive itself.
 

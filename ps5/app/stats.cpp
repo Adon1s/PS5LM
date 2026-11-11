@@ -151,7 +151,14 @@ std::string http_post(int port, const char * path, const std::string & body, int
             req += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
         }
         req += "\r\n" + body;
-        send(fd, req.data(), req.size(), 0);
+        // Whole, even when send takes part of a large body (PS5LM Lean's vision warm-up is ~5 MB).
+        for (size_t sent = 0; sent < req.size();) {
+            const ssize_t n = send(fd, req.data() + sent, req.size() - sent, 0);
+            if (n <= 0) {
+                break;
+            }
+            sent += (size_t) n;
+        }
         char buf[4096];
         for (ssize_t got; (got = recv(fd, buf, sizeof(buf), 0)) > 0;) {
             out.append(buf, (size_t) got);

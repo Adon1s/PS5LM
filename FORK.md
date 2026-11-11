@@ -51,6 +51,15 @@ What is changed, newest last:
   `memory each` / `memory off`; the memory line ends with exact MiB, the heap's in-use and its segments.
   `/data/PS5LM/heap.txt` (MiB) sets the size from which a block gets a mapping of its own. Drop `patches/sdk` once
   PS5LM pins an SDK at or past `55a2de04`; the app still builds against a stock SDK, without the trim.
+  Measured (IQ2_S, v9, screen off, 100 photos): free when ready 1,843 -> 1,942 MiB (largest block); heap after 100
+  photos 1,311 -> 1,108 MiB; largest block after 100 photos 1,229 -> 1,364 MiB.
+- 2026-11-11: vision warm-up (`ps5/app/vision_warmup.cpp`). Once the model is ready, with `--mmproj` and
+  `--image-max-tokens N` in its arguments, the app sends its own server one image at the cap (1280x1024 for N =
+  1280, 32 pixels a token side), so the vision encoder's GPU buffers are sized once. llama.cpp warms it with a square
+  of at most the cap (35 x 35 = 1,225 tokens), and every photo with more tokens than any before rebuilt them bigger:
+  the new buffer was cut from the largest free block and the old one left a hole. Measured from the PC on lean.10
+  (one such image first, then 25 photos): largest block after 25 photos 1,364 -> 1,586 MiB, and no steps at photos
+  15 and 23. `off` in `/data/PS5LM/warmup.txt` turns it off. Host test: `vision_warmup_test.cpp`.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
