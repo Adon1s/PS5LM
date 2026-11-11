@@ -19,6 +19,11 @@ What is changed, newest last:
   (no GL display, dashboard, fonts or sounds), which frees the screen's ~0.42 GiB of the pool for the model. The
   TV shows nothing from the app; notifications and the PC's request files (`load`, `unload`, `memory`, `quit`)
   still work. Any other content, or no file, keeps the screen.
+- 2026-11-11: Settings > Screen. "Turn the screen off" writes `screen.txt` = `off` and restarts the app (as a model
+  switch does), so the model loads again with the screen's memory. "Turn the screen off now (test)" closes the GL
+  display in place, no restart, and logs the memory before and after. With no screen, holding Triangle for 2 s
+  writes `on` and restarts with the screen. The PC can do the same with a request file `screen` holding `off`,
+  `off-now` or `on`.
 - 2026-11-11: a projector pairs by its GGUF header when its name does not: a `general.type` `mmproj` file in the
   model's folder with the same `general.base_model.0.repo_url` or `general.basename` (Unsloth's `mmproj-F16.gguf`
   pairs with every Qwen3.8-27B build, no rename). The name rule still comes first; of several matches the largest

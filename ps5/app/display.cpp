@@ -129,4 +129,23 @@ bool Display::swap() {
     return eglSwapBuffers(g_display, g_surface) == EGL_TRUE;
 }
 
+void Display::close() {
+    if (g_display == EGL_NO_DISPLAY) {
+        return;
+    }
+    eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    if (g_context != EGL_NO_CONTEXT) {
+        eglDestroyContext(g_display, g_context);
+    }
+    if (g_surface != EGL_NO_SURFACE) {
+        eglDestroySurface(g_display, g_surface);
+    }
+    const bool ok = eglTerminate(g_display) == EGL_TRUE;
+    ps5lm::log_line("display: closed%s\n", ok ? "" : " (eglTerminate failed)");
+    g_display = EGL_NO_DISPLAY;
+    g_surface = EGL_NO_SURFACE;
+    g_context = EGL_NO_CONTEXT;
+    width_ = height_ = 0;
+}
+
 }  // namespace ps5lm

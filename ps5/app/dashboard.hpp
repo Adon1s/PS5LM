@@ -86,7 +86,8 @@ class Dashboard {
     struct Request {
         enum Kind { none, load, unload, settings, clear_scratch, market_search, market_open, market_plan, market_download,
                     market_download_unload, download_pause, download_resume, download_remove, suggested_download, ask,
-                    debug_report, storage_app, restart } kind = none;
+                    debug_report, storage_app, restart,
+                    screen_off_restart, screen_off_now } kind = none;  // PS5LM Lean: Settings > Screen
         std::string path;   // a model, a market query, the folder a download goes to (empty: the setting), or what to ask
         int repo = -1, file = -1;  // a market file, a download's index (repo), or a suggestion's (repo)
     };

@@ -1157,6 +1157,10 @@ int main(int, char **) {
     bool was_serving = false;
     bool rescanning = false;
     uint64_t restart_at = 0;  // the frame to stop the model and restart on, or 0
+    // PS5LM Lean: the screen closed in place (Settings > Screen > now), and a
+    // held Triangle that brings the screen back when there is none.
+    bool     screen_closed = false;
+    uint64_t closed_check_at = 0, wake_since = 0;
     for (uint64_t n = 0;; ++n) {
         const int64_t now = hui::sys::monotonic_us();
         const float dt = n == 0 ? 1.0f / 60.0f : std::min(0.05f, (float) (now - last) / 1e6f);
@@ -1227,7 +1231,7 @@ int main(int, char **) {
                 }
             }
         }
-        if (screen_on) {  // without a screen, no dashboard to steer
+        if (screen_on && !screen_closed) {  // without a screen, no dashboard to steer
             dash.update(in, dt, feedback);
             for (const auto & cue : feedback.cues) {
                 if (!models.settings.sounds) {
@@ -1294,6 +1298,54 @@ int main(int, char **) {
         }
 
         Dashboard::Request req = dash.take_request();
+        // PS5LM Lean: the screen off from Settings > Screen, or from the PC (a
+        // request file "screen" holding off, off-now or on).
+        bool wake = false;
+        if (n % 60 == 40 && req.kind == Dashboard::Request::none) {
+            const std::string s = take_request_file(data_path("screen"));
+            if (s == "off") {
+                req = { Dashboard::Request::screen_off_restart, "" };
+            } else if (s == "off-now") {
+                req = { Dashboard::Request::screen_off_now, "" };
+            } else if (s == "on") {
+                wake = true;
+            }
+        }
+        if (!screen_on || screen_closed) {
+            // Triangle held for 2 seconds: the screen comes back by a restart.
+            wake_since = (input.held & hui::action_bit(hui::Action::north)) ? (wake_since ? wake_since : n) : 0;
+            wake = wake || (wake_since != 0 && n - wake_since >= 120);
+        }
+        const auto restart_with_screen = [&](const char * state) {
+            std::ofstream(data_path("screen.txt")) << state << "\n";
+            if (read_lines(g_files.args).empty() && !models.running.empty()) {
+                std::ofstream(g_files.choice) << models.running << "\n";  // the same model, once
+            }
+            ps5lm::log_line("screen %s: restarting%s\n", state,
+                            models.running.empty() ? "" : (" with " + base_name(models.running)).c_str());
+        };
+        if (wake && restart_at == 0 && (!screen_on || screen_closed)) {
+            restart_with_screen("on");
+            notify("PS5LM Lean: bringing the screen back; the model loads again");
+            restart_at = n + 1;
+        } else if (req.kind == Dashboard::Request::screen_off_restart && restart_at == 0) {
+            restart_with_screen("off");
+            dash.set_busy("Turning the screen off",
+                          "The app restarts and loads the model again. Hold Triangle for 2 seconds to bring the screen back.");
+            restart_at = n + 3;  // three frames with the busy screen on the TV first
+        } else if (req.kind == Dashboard::Request::screen_off_now && screen_on && !screen_closed) {
+            log_memory("before the screen closes");
+            renderer.release();
+            display.close();
+            screen_closed = true;
+            closed_check_at = n + 120;  // and again 2 s later, in case the port frees late
+            log_memory("screen closed");
+            notify("PS5LM Lean: screen off. Hold Triangle for 2 seconds to bring it back.");
+        }
+        if (closed_check_at != 0 && n >= closed_check_at) {
+            log_memory("screen closed, 2 s later");
+            closed_check_at = 0;
+        }
         if (req.kind == Dashboard::Request::settings) {
             // The planner's limits change every row's plan; the loaded model
             // keeps its settings until it is loaded again.
@@ -1453,14 +1505,14 @@ int main(int, char **) {
             restart_at = n + 3;  // three frames with the busy screen on the TV first
         }
 
-        if (ui_ok) {
+        if (ui_ok && !screen_closed) {
             render();
             if (n % 60 == 45 && !take_request_file(data_path("screenshot")).empty()) {
                 const bool ok = save_screen(data_path("screen.bmp").c_str(), display.width(), display.height());
                 ps5lm::log_line("screenshot %s\n", ok ? "saved" : "failed");
             }
         }
-        if (screen_on) {
+        if (screen_on && !screen_closed) {
             display.swap();  // paces the loop at the TV's 60 Hz
         } else {
             sceKernelUsleep(16667);

@@ -15,6 +15,9 @@ class Display {
     // Draws the renderer's frame into the TV's framebuffer.
     void present(hui::gfx::Renderer & renderer);
     bool swap();
+    // PS5LM Lean: ends the context, the surface and the display (the GL port's
+    // own memory goes back only if eglTerminate returns it). Not reopened.
+    void close();
     int  width() const { return width_; }
     int  height() const { return height_; }
 

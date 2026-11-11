@@ -81,7 +81,7 @@ constexpr int          kMarketChipCount = 7;
 // ---- Settings -------------------------------------------------------------------
 
 enum class Setting : int { auto_load, default_model, ctx_cap, kv_type, sounds, tools, introspect, scratch_limit, clear_scratch, download_dir,
-                           storage, debug_report, report_kernel_log };
+                           storage, debug_report, report_kernel_log, screen_off_restart, screen_off_now };
 
 struct SettingRow {
     Setting      id;
@@ -122,10 +122,17 @@ constexpr SettingCategory kCategories[] = {
       { { Setting::debug_report, "Create a debug report", "One file to attach to a GitHub issue, with no keys or tokens in it" },
         { Setting::report_kernel_log, "Include the kernel log", "Its last 1 MiB, read from klogsrv; off unless you switch it on" } },
       2 },
+    // PS5LM Lean: the screen holds about 0.35 GiB the model could use.
+    { "Screen",
+      { { Setting::screen_off_restart, "Turn the screen off",
+          "Restarts without it; the model loads again with ~0.35 GiB more. Hold Triangle 2 s to bring it back" },
+        { Setting::screen_off_now, "Turn the screen off now (test)",
+          "Closes it, no restart; app.log says what memory came back. Hold Triangle 2 s to bring it back" } },
+      2 },
     { "Diagnostics", {}, 0 },
 };
-constexpr int kCategoryCount = 7;
-constexpr int kDiagnostics = 6;
+constexpr int kCategoryCount = 8;
+constexpr int kDiagnostics = 7;
 
 constexpr uint32_t     kCtxSteps[] = { 4096, 8192, 16384, 32768, 65536, 131072, 196608, 262144 };
 constexpr const char * kKvSteps[] = { "auto", "f16", "q8_0", "q4_0" };
@@ -436,7 +443,10 @@ bool toggle_value(const Settings & s, Setting id) {
 }
 
 // A row that does something when pressed, with no value of its own.
-bool is_action(Setting id) { return id == Setting::clear_scratch || id == Setting::debug_report; }
+bool is_action(Setting id) {
+    return id == Setting::clear_scratch || id == Setting::debug_report || id == Setting::screen_off_restart ||
+           id == Setting::screen_off_now;
+}
 
 // Used and whole size of the app's storage, from its drive, as the row shows it.
 std::string app_storage_text(const std::vector<Drive> & drives, double size_gib) {
@@ -1015,7 +1025,10 @@ void Dashboard::update_settings(const hui::InputFrame & input, ui::Feedback & fe
         return;
     }
     // Cross does what the row is: clears, flips a switch, or opens its choices.
-    if (id == Setting::clear_scratch) {
+    if (id == Setting::screen_off_restart || id == Setting::screen_off_now) {
+        request_ = { id == Setting::screen_off_now ? Request::screen_off_now : Request::screen_off_restart, "" };
+        feedback.play(Cue::select);
+    } else if (id == Setting::clear_scratch) {
         request_ = { Request::clear_scratch, "" };
         feedback.play(Cue::select);
     } else if (id == Setting::storage) {
@@ -1235,7 +1248,9 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
               { ui::Button::triangle, log_errors_ ? "All lines" : "Errors only" } };
     } else {
         const Setting id = kCategories[setting_category_].rows[setting_row_].id;
-        if (id == Setting::clear_scratch) {
+        if (id == Setting::screen_off_restart || id == Setting::screen_off_now) {
+            h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Turn off" } };
+        } else if (id == Setting::clear_scratch) {
             h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Clear" } };
         } else if (id == Setting::debug_report) {
             h = { { ui::Button::circle, "Back" }, { ui::Button::cross, report_busy_ ? "Writing it" : "Create" } };
@@ -1893,7 +1908,7 @@ void Dashboard::draw_settings(gfx::DrawList & l) const {
             // A chevron down: X opens a list of the choices.
             l.line(kRight - 44, cy - 4, kRight - 36, cy + 4, 2.4f, c);
             l.line(kRight - 36, cy + 4, kRight - 28, cy - 4, 2.4f, c);
-        } else if (live_.scratch_gib > 0) {
+        } else if (r.id == Setting::clear_scratch && live_.scratch_gib > 0) {
             put(l, f.regular, format("%.1f GB in it", live_.scratch_gib), kRight - 28, y + 50, 22, kInk2,
                  gfx::Align::right);
         }
