@@ -66,6 +66,18 @@ jobs:
           git submodule update --init --depth 1
       - name: Build patched RADV and title, inspect ELF and FSELF
         run: scripts/test-native-build.sh
+      # The title folder to copy to /data/homebrew, the launch payload, and
+      # result.json (the files' sha256s) to check the download against.
+      - name: Keep the built title as a download
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ps5lm-title-${{ github.sha }}
+          path: |
+            build/app-ps5/title/
+            build/app-ps5/launch-*.elf
+            build/native-ci/result.json
+          if-no-files-found: error
+          retention-days: 30
       - name: State the full-build validation boundary
         if: always()
         run: |

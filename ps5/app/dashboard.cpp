@@ -22,6 +22,7 @@
 //   notify       a model is ready (not from a button)
 //   complete     a download is saved (not from a button)
 #include "dashboard.hpp"
+#include "storage.hpp"
 #include "suggested.hpp"
 #include "version.hpp"
 
@@ -2062,10 +2063,11 @@ void Dashboard::draw_storage_dialog(gfx::DrawList & l) const {
               { ui::Button::cross, "Use the app's storage" } };
     } else {
         put(l, f.semibold, "Open full storage to PS5LM", r.x + 56, r.y + 86, 34, kInk);
-        para("OnionHEN: over FTP, add PPSA99575 to exact_title_ids in the [app_jailbreak] section of "
+        static const std::string title = title_id();  // read once: this sheet redraws every frame
+        para("OnionHEN: over FTP, add " + title + " to exact_title_ids in the [app_jailbreak] section of "
              "/data/OnionHEN/config.ini.", kInk2);
         para("etaHEN opens /data to homebrew before it starts; if it did not, load etaHEN again, up to date.", kInk2);
-        para("Other HENs: allow PPSA99575 in their app jailbreak list.", kInk2);
+        para("Other HENs: allow " + title + " in their app jailbreak list.", kInk2);
         para("Then start PS5LM again: it asks the HEN for /data at every start.", kInk3);
         h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Start again" } };
     }

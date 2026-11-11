@@ -29,13 +29,13 @@ std::string read_param() {
 }  // namespace
 
 std::string title_id() {
-    // "titleId": "PPSA99575"
+    // "titleId": "PPSA99590"
     const std::string json = read_param();
     const size_t key = json.find("\"titleId\"");
     const size_t colon = key == std::string::npos ? key : json.find(':', key);
     const size_t open = colon == std::string::npos ? colon : json.find('"', colon);
     const size_t close = open == std::string::npos ? open : json.find('"', open + 1);
-    return close == std::string::npos ? "PPSA99575" : json.substr(open + 1, close - open - 1);
+    return close == std::string::npos ? "PPSA99590" : json.substr(open + 1, close - open - 1);
 }
 
 void find_sandbox(const std::string & title) {

@@ -840,8 +840,8 @@ int main(int, char **) {
     // The first start without full storage asks on the screen what to do;
     // the notification is for a screen that does not come up.
     if (!full && storage_choice().empty()) {
-        notify("PS5LM: full storage (/data) is closed to the app, so it keeps its files in its own storage. "
-               "On OnionHEN, add PPSA99575 to app_jailbreak.exact_title_ids in /data/OnionHEN/config.ini.");
+        notify(("PS5LM: full storage (/data) is closed to the app, so it keeps its files in its own storage. "
+                "On OnionHEN, add " + title + " to app_jailbreak.exact_title_ids in /data/OnionHEN/config.ini.").c_str());
     }
     // One device-local heap over the whole pool (RADV splits an APU's 2/3 to
     // 1/3), and a HOME for llama.cpp, which throws without one.
