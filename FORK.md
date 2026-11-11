@@ -12,6 +12,9 @@ What is changed, newest last:
   pipe into a 2 MiB memory ring, and one thread writes the ring to `app.log`. Stock PS5LM writes them straight to
   `/data`, and a slow write there stopped the whole app (cobanov/PS5LM#70). The memory line in `app.log` also gives
   the sink's figures, and a memory line comes once a second while a model loads. Host test: `log_sink_test.cpp`.
+- 2026-11-11: the log sink wraps the print functions at link time instead (`--wrap` for printf, fprintf, vprintf,
+  vfprintf, puts, fputs, fputc, putc, putchar, fwrite in `scripts/build-app.sh`). On the console a title may not
+  `dup2` over its streams (EPERM), so the pipe never started there.
 - 2026-11-11: screen-off mode. `off` on the first line of `/data/PS5LM/screen.txt` starts the app without its screen
   (no GL display, dashboard, fonts or sounds), which frees the screen's ~0.42 GiB of the pool for the model. The
   TV shows nothing from the app; notifications and the PC's request files (`load`, `unload`, `memory`, `quit`)

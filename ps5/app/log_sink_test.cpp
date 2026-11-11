@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Host test for log_sink (PS5LM Lean), no console needed:
-//   c++ -std=c++17 -O1 -pthread ps5/app/log_sink_test.cpp ps5/app/log_sink.cpp -o build/log_sink_test
+//   c++ -std=c++17 -O1 -U_FORTIFY_SOURCE -pthread ps5/app/log_sink_test.cpp ps5/app/log_sink.cpp
+//       -Wl,--wrap=printf,--wrap=fprintf,--wrap=vprintf,--wrap=vfprintf,--wrap=puts,--wrap=fputs,--wrap=fputc,--wrap=putc,--wrap=putchar,--wrap=fwrite -o build/log_sink_test
 //   build/log_sink_test
 // The log file is a FIFO that nothing reads while the test prints, so every
 // write to it blocks, as a slow /data does. Prints must still return at once;

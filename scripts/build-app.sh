@@ -211,7 +211,11 @@ flags=()
 for f in "${radv_link_flags[@]}"; do
     case $f in --defsym=getaddrinfo=*|--defsym=freeaddrinfo=*) ;; *) flags+=("$f") ;; esac
 done
-radv_link_flags=("${flags[@]}" --wrap=sceAgcInit)
+# PS5LM Lean: prints to stdout and stderr go to ps5/app/log_sink.cpp, which
+# never waits for storage (a title may not dup2 over its streams).
+log_wraps=()
+for f in printf fprintf vprintf vfprintf puts fputs fputc putc putchar fwrite; do log_wraps+=("--wrap=$f"); done
+radv_link_flags=("${flags[@]}" --wrap=sceAgcInit "${log_wraps[@]}")
 mapfile -t libs < <(find "$out/llama" -name '*.a' | sort)
 "$sdk/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
     --version-script "$vk/tooling/native/app-symbols.map" --exclude-libs=ALL \

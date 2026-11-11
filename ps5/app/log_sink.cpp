@@ -1,18 +1,40 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PS5LM Lean: prints that never wait for storage (log_sink.hpp).
+//
+// The console's C library has no funopen, and a title may not dup2 a pipe
+// over its stdout or stderr (EPERM, measured 2026-11-11). So the print
+// functions themselves are wrapped at link time (scripts/build-app.sh passes
+// --wrap for each), the way the title heap wraps malloc: a print to stdout or
+// stderr from anything linked into the title (the app, llama.cpp, ggml, the
+// GPU driver, the GL library, libc++) lands in a memory ring here, and a
+// thread of the sink's own writes the ring to the file. Prints to any other
+// stream, and every print before the sink starts, go to the real function.
 #include "log_sink.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unistd.h>
 #include <vector>
+
+extern "C" {
+int    __real_vfprintf(FILE * f, const char * fmt, va_list ap);
+int    __real_fputs(const char * s, FILE * f);
+int    __real_puts(const char * s);
+int    __real_fputc(int c, FILE * f);
+int    __real_putc(int c, FILE * f);
+int    __real_putchar(int c);
+size_t __real_fwrite(const void * p, size_t size, size_t n, FILE * f);
+}
 
 namespace ps5lm {
 
@@ -30,12 +52,16 @@ struct Sink {
     bool                    writing = false;  // the writer holds a chunk outside the lock
     uint64_t                unreported = 0;   // dropped and not yet noted in the file
     LogSinkStats            stats;
-    int                     read_fd = -1;
-    int                     out_fd  = -1;
+    int                     out_fd = -1;
 };
 
-Sink   g;
-size_t g_ring_bytes = 2u << 20;
+Sink              g;
+std::atomic<bool> g_active{ false };
+size_t            g_ring_bytes = 2u << 20;
+
+bool ours(FILE * f) {
+    return g_active.load(std::memory_order_acquire) && (f == stdout || f == stderr);
+}
 
 // Appends to the ring; the caller holds the lock and checked the room.
 void put_locked(const char * p, size_t n) {
@@ -65,29 +91,41 @@ void note_drops_locked(size_t room_needed_after) {
     }
 }
 
-// Pipe to ring. Never touches storage, so it keeps the pipe empty and every
-// print returns at once.
-void drain() {
-    std::vector<char> buf(64u << 10);
-    for (;;) {
-        const ssize_t n = read(g.read_fd, buf.data(), buf.size());
-        if (n < 0 && errno == EINTR) {
-            continue;
-        }
-        if (n <= 0) {
-            return;  // the read end stays open, so a print can never raise SIGPIPE
-        }
-        std::lock_guard<std::mutex> lock(g.mtx);
-        g.stats.bytes_in += (uint64_t) n;
-        note_drops_locked((size_t) n);
-        const size_t take = std::min((size_t) n, g.ring.size() - g.held);
-        put_locked(buf.data(), take);
-        if (take < (size_t) n) {
-            g.stats.bytes_dropped += (uint64_t) n - take;
-            g.unreported += (uint64_t) n - take;
-        }
-        g.has_text.notify_one();
+// Text into the ring. Waits only for the ring's lock, held for a copy.
+void push(const char * p, size_t n) {
+    if (n == 0) {
+        return;
     }
+    std::lock_guard<std::mutex> lock(g.mtx);
+    g.stats.bytes_in += n;
+    note_drops_locked(n);
+    const size_t take = std::min(n, g.ring.size() - g.held);
+    put_locked(p, take);
+    if (take < n) {
+        g.stats.bytes_dropped += n - take;
+        g.unreported += n - take;
+    }
+    g.has_text.notify_one();
+}
+
+int push_vformat(const char * fmt, va_list ap) {
+    char    small[512];
+    va_list ap2;
+    va_copy(ap2, ap);
+    const int n = std::vsnprintf(small, sizeof(small), fmt, ap);
+    if (n < 0) {
+        va_end(ap2);
+        return n;
+    }
+    if ((size_t) n < sizeof(small)) {
+        push(small, (size_t) n);
+    } else {
+        std::string big((size_t) n + 1, '\0');
+        std::vsnprintf(&big[0], big.size(), fmt, ap2);
+        push(big.data(), (size_t) n);
+    }
+    va_end(ap2);
+    return n;
 }
 
 void write_all(int fd, const char * p, size_t n) {
@@ -135,8 +173,16 @@ void writer() {
     }
 }
 
-// Stock PS5LM's streams: both append to the file, stderr unbuffered.
-bool fallback(const std::string & path, std::string * why, const char * what, int err) {
+}  // namespace
+
+void log_sink_set_ring_bytes(size_t bytes) {
+    g_ring_bytes = std::max<size_t>(bytes, 4096);
+}
+
+bool log_sink_start(const std::string & path, std::string * why) {
+    // Stock PS5LM's streams first: both append to the file, stderr unbuffered.
+    // They still carry whatever the wrappers do not see (the C library's own
+    // prints), and everything if the sink cannot start.
     if (std::FILE * f = std::fopen(path.c_str(), "w")) {
         std::fclose(f);
     }
@@ -146,83 +192,40 @@ bool fallback(const std::string & path, std::string * why, const char * what, in
     if (std::freopen(path.c_str(), "a", stderr) != nullptr) {
         setvbuf(stderr, nullptr, _IONBF, 0);
     }
-    if (why) {
-        *why = std::string(what) + ": " + std::strerror(err);
-    }
-    return false;
-}
-
-}  // namespace
-
-void log_sink_set_ring_bytes(size_t bytes) {
-    g_ring_bytes = std::max<size_t>(bytes, 4096);
-}
-
-bool log_sink_start(const std::string & path, std::string * why) {
-    int p[2];
-    if (pipe(p) != 0) {
-        return fallback(path, why, "pipe", errno);
-    }
-    const int fl = fcntl(p[1], F_GETFL);
-    if (fl == -1 || fcntl(p[1], F_SETFL, fl | O_NONBLOCK) == -1) {
-        const int err = errno;
-        close(p[0]);
-        close(p[1]);
-        return fallback(path, why, "fcntl", err);
-    }
-    const int out = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0666);
+    const int out = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (out < 0) {
-        const int err = errno;
-        close(p[0]);
-        close(p[1]);
-        return fallback(path, why, "open", err);
+        if (why) {
+            *why = std::string("open: ") + std::strerror(errno);
+        }
+        return false;
     }
-    // Each stream gets a descriptor of its own, which the pipe then replaces.
-    // Mode "w", not "a": an append stream seeks before each write, and a seek
-    // on a pipe fails. The buffering is set after, while each stream is a pipe.
-    std::fflush(stdout);
-    std::fflush(stderr);
-    if (std::freopen(path.c_str(), "w", stdout) == nullptr || std::freopen(path.c_str(), "w", stderr) == nullptr ||
-        dup2(p[1], fileno(stdout)) < 0 || dup2(p[1], fileno(stderr)) < 0) {
-        const int err = errno;
-        close(p[0]);
-        close(p[1]);
-        close(out);
-        return fallback(path, why, "freopen or dup2", err);
-    }
-    close(p[1]);
-    setvbuf(stdout, nullptr, _IOLBF, 0);
-    setvbuf(stderr, nullptr, _IONBF, 0);
-
     g.ring.assign(g_ring_bytes, '\0');
-    g.read_fd = p[0];
-    g.out_fd  = out;
+    g.out_fd = out;
     try {
-        std::thread(drain).detach();
         std::thread(writer).detach();
     } catch (...) {
-        // No thread: put the streams back on the file. The pipe's read end
-        // stays open, so nothing already written to it can raise SIGPIPE.
         close(out);
-        return fallback(path, why, "thread", EAGAIN);
+        if (why) {
+            *why = "no thread for the writer";
+        }
+        return false;
     }
-    std::lock_guard<std::mutex> lock(g.mtx);
-    g.stats.running = true;
+    {
+        std::lock_guard<std::mutex> lock(g.mtx);
+        g.stats.running = true;
+    }
+    std::fflush(stdout);
+    g_active.store(true, std::memory_order_release);
     return true;
 }
 
 void log_sink_flush(int ms) {
-    std::fflush(stdout);
-    std::fflush(stderr);
-    {
-        std::lock_guard<std::mutex> lock(g.mtx);
-        if (!g.stats.running) {
-            return;
-        }
+    if (!g_active.load(std::memory_order_acquire)) {
+        std::fflush(stdout);
+        std::fflush(stderr);
+        return;
     }
-    const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(ms);
-    // What is still in the pipe reaches the ring within a moment.
-    std::this_thread::sleep_for(std::chrono::milliseconds(std::min(ms, 50)));
+    const Clock::time_point      deadline = Clock::now() + std::chrono::milliseconds(ms);
     std::unique_lock<std::mutex> lock(g.mtx);
     note_drops_locked(0);
     if (g.held > 0) {
@@ -237,3 +240,80 @@ LogSinkStats log_sink_stats() {
 }
 
 }  // namespace ps5lm
+
+// The wrapped print functions (scripts/build-app.sh: --wrap=<name> for each).
+extern "C" {
+
+int __wrap_vfprintf(FILE * f, const char * fmt, va_list ap) {
+    return ps5lm::ours(f) ? ps5lm::push_vformat(fmt, ap) : __real_vfprintf(f, fmt, ap);
+}
+
+int __wrap_fprintf(FILE * f, const char * fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = __wrap_vfprintf(f, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int __wrap_vprintf(const char * fmt, va_list ap) {
+    return __wrap_vfprintf(stdout, fmt, ap);
+}
+
+int __wrap_printf(const char * fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = __wrap_vfprintf(stdout, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int __wrap_fputs(const char * s, FILE * f) {
+    if (!ps5lm::ours(f)) {
+        return __real_fputs(s, f);
+    }
+    ps5lm::push(s, std::strlen(s));
+    return 1;
+}
+
+int __wrap_puts(const char * s) {
+    if (!ps5lm::ours(stdout)) {
+        return __real_puts(s);
+    }
+    ps5lm::push(s, std::strlen(s));
+    ps5lm::push("\n", 1);
+    return 1;
+}
+
+int __wrap_fputc(int c, FILE * f) {
+    if (!ps5lm::ours(f)) {
+        return __real_fputc(c, f);
+    }
+    const char ch = (char) c;
+    ps5lm::push(&ch, 1);
+    return (unsigned char) c;
+}
+
+int __wrap_putc(int c, FILE * f) {
+    if (!ps5lm::ours(f)) {
+        return __real_putc(c, f);
+    }
+    return __wrap_fputc(c, f);
+}
+
+int __wrap_putchar(int c) {
+    if (!ps5lm::ours(stdout)) {
+        return __real_putchar(c);
+    }
+    return __wrap_fputc(c, stdout);
+}
+
+size_t __wrap_fwrite(const void * p, size_t size, size_t n, FILE * f) {
+    if (!ps5lm::ours(f)) {
+        return __real_fwrite(p, size, n, f);
+    }
+    ps5lm::push(static_cast<const char *>(p), size * n);
+    return n;
+}
+
+}  // extern "C"
