@@ -16,6 +16,10 @@ What is changed, newest last:
   (no GL display, dashboard, fonts or sounds), which frees the screen's ~0.42 GiB of the pool for the model. The
   TV shows nothing from the app; notifications and the PC's request files (`load`, `unload`, `memory`, `quit`)
   still work. Any other content, or no file, keeps the screen.
+- 2026-11-11: a projector pairs by its GGUF header when its name does not: a `general.type` `mmproj` file in the
+  model's folder with the same `general.base_model.0.repo_url` or `general.basename` (Unsloth's `mmproj-F16.gguf`
+  pairs with every Qwen3.8-27B build, no rename). The name rule still comes first; of several matches the largest
+  file wins. Choosing a model in the library renames `app-args.txt` to `app-args.off.txt` instead of deleting it.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add

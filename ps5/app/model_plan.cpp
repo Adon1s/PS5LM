@@ -213,6 +213,9 @@ ModelInfo parse_model_info(Reader r, const std::string & path, uint64_t file_byt
     }
 
     m.arch = strs["general.architecture"];
+    m.gguf_type = strs["general.type"];
+    m.basename  = strs["general.basename"];
+    m.base_repo = strs["general.base_model.0.repo_url"];
     if (!strs["general.name"].empty()) {
         m.name = strs["general.name"];
     }
@@ -271,11 +274,52 @@ ModelInfo parse_model_info(Reader r, const std::string & path, uint64_t file_byt
 
 }  // namespace
 
+std::string find_mmproj(const ModelInfo & model) {
+    const std::string by_name = find_mmproj(model.path);
+    if (!by_name.empty() || (model.basename.empty() && model.base_repo.empty())) {
+        return by_name;
+    }
+    const size_t      slash = model.path.find_last_of('/');
+    const std::string dir   = slash == std::string::npos ? "." : model.path.substr(0, slash);
+    std::string       best;
+    uint64_t          best_bytes = 0;
+    DIR *             d = opendir(dir.c_str());
+    if (!d) {
+        return best;
+    }
+    while (dirent * e = readdir(d)) {
+        const std::string n = e->d_name;
+        // Only files named as projectors are opened: a model's header holds
+        // its whole vocabulary, a projector's a few dozen keys.
+        if (lower(n).find("mmproj") == std::string::npos || n.size() < 6 || lower(n.substr(n.size() - 5)) != ".gguf") {
+            continue;
+        }
+        const std::string path = dir + "/" + n;
+        if (path == model.path) {
+            continue;
+        }
+        Reader            r;
+        r.f = std::fopen(path.c_str(), "rb");
+        const ModelInfo p = parse_model_info(r, path, 0);
+        if (p.gguf_type != "mmproj" && p.arch != "clip") {
+            continue;
+        }
+        const bool same = (!model.base_repo.empty() && p.base_repo == model.base_repo) ||
+                          (!model.basename.empty() && lower(p.basename) == lower(model.basename));
+        if (same && p.file_bytes > best_bytes) {
+            best       = path;
+            best_bytes = p.file_bytes;
+        }
+    }
+    closedir(d);
+    return best;
+}
+
 ModelInfo read_model_info(const std::string & path) {
     Reader r;
     r.f = std::fopen(path.c_str(), "rb");
     ModelInfo m = parse_model_info(r, path, 0);
-    m.mmproj = find_mmproj(path);
+    m.mmproj = find_mmproj(m);
     if (!m.mmproj.empty()) {
         struct stat st = {};
         m.mmproj_bytes = stat(m.mmproj.c_str(), &st) == 0 ? (uint64_t) st.st_size : 0;

@@ -1433,7 +1433,14 @@ int main(int, char **) {
             // one starts from the whole pool, with model.txt saying what to load.
             std::ofstream(g_files.choice) << (req.kind == Dashboard::Request::load ? req.path : std::string("none")) << "\n";
             if (req.kind == Dashboard::Request::load) {
-                unlink(g_files.args.c_str());  // the library's choice replaces a manual override
+                // The library's choice replaces a manual override. PS5LM Lean
+                // keeps the file as app-args.off.txt (renamed, not deleted), so
+                // hand-tuned settings survive a click in the library.
+                const std::string kept = data_path("app-args.off.txt");
+                if (std::rename(g_files.args.c_str(), kept.c_str()) == 0) {
+                    ps5lm::log_line("app-args.txt kept as %s; the library's choice loads next
+", kept.c_str());
+                }
             }
             ps5lm::log_line("restarting for %s\n", req.kind == Dashboard::Request::load ? req.path.c_str() : "no model");
             const bool loaded = !models.running.empty();

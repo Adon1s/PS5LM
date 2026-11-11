@@ -9,6 +9,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
+#include <fstream>
+#include <unistd.h>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -122,6 +125,45 @@ int main(int argc, char ** argv) {
     ps5lm::ModelInfo full = s;
     full.n_swa_layers = 0;
     assert(ps5lm::plan_model(full, budget, 262144).ctx == 131072);
+
+    // PS5LM Lean: a projector pairs by its header when its name does not
+    // ("mmproj-F16.gguf", as Unsloth names every one), the larger of two
+    // matches wins, and another model's projector never pairs.
+    {
+        char dir[] = "/tmp/model_plan_test.XXXXXX";
+        assert(mkdtemp(dir));
+        const std::string at = dir;
+        const auto write = [&](const std::string & name, const Gguf & g, size_t pad) {
+            std::ofstream(at + "/" + name, std::ios::binary) << g.bytes() << std::string(pad, '\0');
+        };
+        Gguf qwen = chat;
+        qwen.kv("general.type", "model").kv("general.basename", "Qwen3.8-27B")
+            .kv("general.base_model.0.repo_url", "https://huggingface.co/Qwen/Qwen3.8-27B");
+        Gguf f16;
+        f16.kv("general.architecture", "clip").kv("general.type", "mmproj").kv("general.basename", "Qwen3.8-27B")
+            .kv("general.base_model.0.repo_url", "https://huggingface.co/Qwen/Qwen3.8-27B");
+        Gguf other;
+        other.kv("general.architecture", "clip").kv("general.type", "mmproj").kv("general.basename", "gemma-4-31B");
+        write("Qwen3.8-27B-UD-IQ2_S.gguf", qwen, 0);
+        write("mmproj-F16.gguf", f16, 4096);
+        write("mmproj-small.gguf", f16, 1024);   // the same base, smaller: loses to F16
+        write("mmproj-other.gguf", other, 8192);  // another model's: never pairs
+        const ps5lm::ModelInfo m = ps5lm::read_model_info(at + "/Qwen3.8-27B-UD-IQ2_S.gguf");
+        assert(m.basename == "Qwen3.8-27B" && m.gguf_type == "model");
+        assert(m.mmproj == at + "/mmproj-F16.gguf");
+        assert(m.mmproj_bytes > 4096);
+        // The name rule still comes first: a projector named after the model wins.
+        write("mmproj-Qwen3.8-27B-Q8_0.gguf", f16, 0);
+        assert(ps5lm::read_model_info(at + "/Qwen3.8-27B-UD-IQ2_S.gguf").mmproj == at + "/mmproj-Qwen3.8-27B-Q8_0.gguf");
+        // A model with no base-model keys pairs by name only, as before.
+        write("Plain-7B.gguf", chat, 0);
+        assert(ps5lm::read_model_info(at + "/Plain-7B.gguf").mmproj.empty());
+        for (const char * n : { "Qwen3.8-27B-UD-IQ2_S.gguf", "mmproj-F16.gguf", "mmproj-small.gguf", "mmproj-other.gguf",
+                                "mmproj-Qwen3.8-27B-Q8_0.gguf", "Plain-7B.gguf" }) {
+            unlink((at + "/" + n).c_str());
+        }
+        rmdir(dir);
+    }
 
     if (argc < 2) {
         std::puts("model_plan_test: ok (synthetic only)");

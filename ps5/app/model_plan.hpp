@@ -22,6 +22,9 @@ struct ModelInfo {
     std::string name;   // general.name, or the file name
     std::string arch;   // general.architecture
     std::string decision;  // "<arch>.decision.type" (openjev, clef, lfm2-d1, ...): answers /v1/systemone, not chat
+    std::string gguf_type;  // general.type: "model", "mmproj", or empty
+    std::string basename;   // general.basename ("Qwen3.8-27B")
+    std::string base_repo;  // general.base_model.0.repo_url ("https://huggingface.co/Qwen/Qwen3.8-27B")
     uint64_t    file_bytes      = 0;
     uint32_t    n_layer         = 0;
     uint32_t    n_ff            = 0;   // feed-forward width, the widest layer's
@@ -50,6 +53,13 @@ ModelInfo read_model_header(const std::string & name, const std::string & head, 
 
 // The vision projector ("mmproj") beside a model, or empty.
 std::string find_mmproj(const std::string & model_path);
+
+// PS5LM Lean: the same by name first, then by the GGUF headers: a projector
+// (general.type "mmproj") in the model's folder made from the same base model
+// (general.base_model.0.repo_url or general.basename), whatever its file is
+// called, so Unsloth's "mmproj-F16.gguf" pairs without a rename. With several,
+// the largest file, the most precise. read_model_info uses this one.
+std::string find_mmproj(const ModelInfo & model);
 
 ModelInfo read_model_info(const std::string & path);
 
