@@ -22,6 +22,9 @@ What is changed, newest last:
   file wins. Choosing a model in the library renames `app-args.txt` to `app-args.off.txt` instead of deleting it.
 - 2026-11-11: the Home screen's context size comes from the server (`/slots` `n_ctx`), so a model loaded from
   `app-args.txt` no longer shows "of 0k".
+- 2026-11-11: the planner gives vision models with a causal projector (Qwen's) `-ub 256`, `-b 1280` and
+  `--image-max-tokens 1280` instead of the 2048 ubatch, keeping 0.5 GiB of headroom for photos. On the console that
+  ubatch alone freed 0.57 GiB (0.90 -> 1.47 GiB free at load) at the same speed and answers. Other projectors keep 2048.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
