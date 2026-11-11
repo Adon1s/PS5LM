@@ -289,18 +289,40 @@ std::string take_request_file(const std::string & path) {
 // what ggml says about each device (its GPU figure wraps once the unified
 // heap is over-committed; the raw numbers still show a change). `devices`
 // false before the GPU opens: asking ggml would open it.
+// Every free block of the direct pool in [lo, hi), not only the largest
+// (PS5LM Lean): the largest hides memory handed back elsewhere, such as a
+// closed screen's. Asks the kernel only; allocates nothing.
+void free_blocks(int64_t lo, int64_t hi, size_t & total, int & count, int depth = 0) {
+    constexpr int64_t kUnit = 64 * 1024;
+    if (hi - lo < kUnit || count >= 256 || depth > 48) {
+        return;
+    }
+    int64_t at = 0;
+    size_t  len = 0;
+    if (sceKernelAvailableDirectMemorySize(lo, hi, kUnit, &at, &len) != 0 || len == 0) {
+        return;
+    }
+    total += len;
+    count++;
+    free_blocks(lo, at, total, count, depth + 1);
+    free_blocks(at + (int64_t) len, hi, total, count, depth + 1);
+}
+
 void log_memory(const char * when, bool devices = true) {
     int64_t at = 0;
-    size_t  avail = 0, flex = 0, flex_free = 0;
+    size_t  avail = 0, flex = 0, flex_free = 0, all_free = 0;
+    int     blocks = 0;
     const int64_t pool = sceKernelGetDirectMemorySize();
     sceKernelAvailableDirectMemorySize(0, pool, 2 * 1024 * 1024, &at, &avail);
+    free_blocks(0, pool, all_free, blocks);
     sceKernelConfiguredFlexibleMemorySize(&flex);
     sceKernelAvailableFlexibleMemorySize(&flex_free);
     struct ps5_heap_stats heap = {};
     ps5_heap_stats(&heap);
-    ps5lm::log_line("memory %s: pool %.4f GiB, pool free %.2f GiB, flexible %zu MiB (%zu free), cpu heap %.2f GiB "
-                    "(peak %.2f)", when, pool / 1073741824.0, avail / 1073741824.0, flex >> 20, flex_free >> 20,
-                    heap.mapped_bytes / 1073741824.0, heap.peak_bytes / 1073741824.0);
+    ps5lm::log_line("memory %s: pool %.4f GiB, pool free %.2f GiB (all free %.2f GiB in %d blocks), flexible %zu MiB "
+                    "(%zu free), cpu heap %.2f GiB (peak %.2f)", when, pool / 1073741824.0, avail / 1073741824.0,
+                    all_free / 1073741824.0, blocks, flex >> 20, flex_free >> 20, heap.mapped_bytes / 1073741824.0,
+                    heap.peak_bytes / 1073741824.0);
     // The log sink's own figures: how far behind /data fell (PS5LM Lean).
     const LogSinkStats sink = log_sink_stats();
     if (sink.running) {
