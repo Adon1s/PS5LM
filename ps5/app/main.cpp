@@ -1010,8 +1010,11 @@ int main(int, char **) {
         render();
         display.swap();
     }
-    sceSystemServiceHideSplashScreen();
-    if (!screen_on) {
+    // Without a screen the system's splash stays up, so the TV shows the app's
+    // picture rather than black (as cobanov/PS5LM#73 does for fleet workers).
+    if (screen_on) {
+        sceSystemServiceHideSplashScreen();
+    } else {
         notify("PS5LM Lean: screen off (screen.txt). The server comes up on port 8081.");
     }
 

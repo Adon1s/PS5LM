@@ -1,0 +1,31 @@
+diff --git a/src/llama-mmap.cpp b/src/llama-mmap.cpp
+--- a/src/llama-mmap.cpp
++++ b/src/llama-mmap.cpp
+@@ -221,6 +221,17 @@ struct llama_file::impl {
+         if (fp == NULL) {
+             throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
+         }
++#if defined(__PROSPERO__)
++        // PS5LM: each read call of a title costs about 1.4 ms on the console
++        // (cobanov/PS5LM#74: 64 KiB reads ran at 70 MB/s, 8 MiB reads at
++        // 2 GB/s), and a model loaded at about 90 MB/s through stdio's own
++        // small buffer. Reads go through an 8 MiB one instead, set before
++        // the first read; it lives as long as the stream.
++        if (std::strchr(mode, 'r') != nullptr) {
++            stdio_buf.resize(8u << 20);
++            std::setvbuf(fp, stdio_buf.data(), _IOFBF, stdio_buf.size());
++        }
++#endif
+         seek(0, SEEK_END);
+         size = tell();
+         seek(0, SEEK_SET);
+@@ -396,6 +407,9 @@ struct llama_file::impl {
+     }
+     int fd = -1;
+     std::string fname;
++#if defined(__PROSPERO__)
++    std::vector<char> stdio_buf;  // the stream's read buffer, freed after fclose
++#endif
+ #endif
+ 
+     size_t read_alignment() const {

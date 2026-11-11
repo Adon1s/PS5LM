@@ -64,6 +64,16 @@ What is changed, newest last:
   free (largest block), warm-up 11.6 s, then 434 MiB through 25 photos with no step; on lean.10 with the same image
   sent from the PC, 125 photos ran with 0 errors at a median 12.0 s, largest block 490 -> 466 MiB, all free 638 ->
   618 MiB.
+- 2026-11-11 (lean.12, from ntindle's cobanov/PS5LM#73 and #74, not yet measured here):
+  - `sce_sys/param.json` declares a 256 MiB flexible pool (the system's default is 448), so the direct pool models
+    use is 12.1875 GiB instead of 12 (#73 measured +192 MiB). The system libraries live in the flexible pool: watch
+    the memory line's "flexible ... free" (#73 saw 111 MiB free with the app serving and its screen on). It takes
+    effect when the title starts from the home screen; a restart for a model keeps the pool it started with.
+  - With the screen off, the system's splash stays up (the TV shows the app's picture, not black), as #73 does for
+    fleet workers.
+  - `patches/0010`: llama.cpp's model file reads through an 8 MiB stdio buffer on the console. #74 measured a
+    title's read calls at about 1.4 ms each (64 KiB reads at 70 MB/s, 8 MiB at 2 GB/s); our model loads read at
+    about 90 MB/s (8.4 GB in ~90 s).
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
