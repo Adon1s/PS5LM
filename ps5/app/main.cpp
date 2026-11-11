@@ -875,21 +875,32 @@ int main(int, char **) {
     // of it: the pool size follows sce_sys/param.json.
     log_memory("at start", false);
 
+    // PS5LM Lean: "off" in screen.txt leaves the screen closed, for a console
+    // that only serves. The screen holds about 0.42 GiB of the pool (the GL
+    // port's 320 MiB render pool, 4K frame buffers, fonts); without it that
+    // memory goes to the model. The TV shows nothing from the app; the
+    // system's notifications still say when the model is ready or failed, and
+    // the PC's request files (load, unload, memory, quit) still work.
+    const std::vector<std::string> screen_txt = read_lines(data_path("screen.txt"));
+    const bool screen_on = screen_txt.empty() || screen_txt[0] != "off";
+
     // The screen first: it takes from the same memory as the model.
     Display display;
-    if (!display.open(1920, 1080)) {
+    if (!screen_on) {
+        ps5lm::log_line("screen off (screen.txt): no display, no dashboard\n");
+    } else if (!display.open(1920, 1080)) {
         ps5lm::log_line("no display\n");
     }
     hui::gfx::Renderer renderer;
     hui::gfx::Font regular, semibold, headline, mono;
     hui::ui::Fonts fonts;
-    const bool ui_ok = renderer.init() && load_font(renderer, "manrope-500.huifont", &regular, &fonts.regular) &&
+    const bool ui_ok = screen_on && renderer.init() && load_font(renderer, "manrope-500.huifont", &regular, &fonts.regular) &&
                        load_font(renderer, "manrope-600.huifont", &semibold, &fonts.semibold) &&
                        load_font(renderer, "manrope-200.huifont", &headline, &fonts.display) &&
                        load_font(renderer, "dejavu-sans-mono.huifont", &mono, &fonts.mono);
     fonts.pixel = fonts.mono;
     fonts.hand = fonts.regular;
-    ps5lm::log_line("dashboard %s\n", ui_ok ? "ready" : "failed");
+    ps5lm::log_line("dashboard %s\n", ui_ok ? "ready" : screen_on ? "failed" : "off");
 
     Dashboard dash(fonts);
     DashboardFrame frame;
@@ -916,6 +927,9 @@ int main(int, char **) {
         display.swap();
     }
     sceSystemServiceHideSplashScreen();
+    if (!screen_on) {
+        notify("PS5LM Lean: screen off (screen.txt). The server comes up on port 8081.");
+    }
 
     // Fleet is a mutually exclusive startup mode, not another local model.
     // In particular, do not start StatsCollector (its HTTP probes), model
@@ -1213,15 +1227,17 @@ int main(int, char **) {
                 }
             }
         }
-        dash.update(in, dt, feedback);
-        for (const auto & cue : feedback.cues) {
-            if (!models.settings.sounds) {
-                break;
+        if (screen_on) {  // without a screen, no dashboard to steer
+            dash.update(in, dt, feedback);
+            for (const auto & cue : feedback.cues) {
+                if (!models.settings.sounds) {
+                    break;
+                }
+                sounds.play(mixer, cue.set == hui::audio::SoundSet::count ? hui::audio::SoundSet::glass : cue.set, cue);
             }
-            sounds.play(mixer, cue.set == hui::audio::SoundSet::count ? hui::audio::SoundSet::glass : cue.set, cue);
-        }
-        if (feedback.rumble_strength > 0.0f) {
-            pad.rumble(feedback.rumble_strength, feedback.rumble_seconds);
+            if (feedback.rumble_strength > 0.0f) {
+                pad.rumble(feedback.rumble_strength, feedback.rumble_seconds);
+            }
         }
         pad.tick(dt);
 
@@ -1438,7 +1454,11 @@ int main(int, char **) {
                 ps5lm::log_line("screenshot %s\n", ok ? "saved" : "failed");
             }
         }
-        display.swap();
+        if (screen_on) {
+            display.swap();  // paces the loop at the TV's 60 Hz
+        } else {
+            sceKernelUsleep(16667);
+        }
         if (n % 60 == 0) {
             quit_if_asked();
         }
