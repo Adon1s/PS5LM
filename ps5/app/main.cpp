@@ -1438,8 +1438,7 @@ int main(int, char **) {
                 // hand-tuned settings survive a click in the library.
                 const std::string kept = data_path("app-args.off.txt");
                 if (std::rename(g_files.args.c_str(), kept.c_str()) == 0) {
-                    ps5lm::log_line("app-args.txt kept as %s; the library's choice loads next
-", kept.c_str());
+                    ps5lm::log_line("app-args.txt kept as %s; the library's choice loads next\n", kept.c_str());
                 }
             }
             ps5lm::log_line("restarting for %s\n", req.kind == Dashboard::Request::load ? req.path.c_str() : "no model");
