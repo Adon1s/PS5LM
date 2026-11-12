@@ -40,6 +40,11 @@ struct Exchange {
     double      started = 0;  // steady clock, seconds
 };
 
+// PS5LM Lean: the app's own vision warm-up (vision_warmup.cpp) comes through
+// the same hooks as a request from the network. Nobody asked it: Home's chat
+// and the count of requests answered leave it out.
+inline bool is_warm_up(const Exchange & e) { return e.client.rfind("127.0.0.1", 0) == 0 && e.asked == "[image] Warm-up."; }
+
 enum class ServerState : uint8_t { loading, ready, generating, failed, no_model };
 
 struct ModelRow {

@@ -320,7 +320,7 @@ void StatsCollector::activity_end(int id, int status) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto & e : live_.activity) {
         if (e.id == id) {
-            live_.served += status < 400;
+            live_.served += status < 400 && !is_warm_up(e);
             e.status = status;
             e.seconds = steady_s() - e.started;
         }

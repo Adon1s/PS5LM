@@ -134,6 +134,8 @@ class Dashboard {
     void draw_status(hui::gfx::DrawList & list) const;
     void draw_dock(hui::gfx::DrawList & list) const;
     void draw_home(hui::gfx::DrawList & list) const;
+    void draw_requests(hui::gfx::DrawList & list, const hui::gfx::Rect & panel) const;
+    void draw_feed(hui::gfx::DrawList & list, float x, float w, float top, float bottom) const;
     void draw_models(hui::gfx::DrawList & list) const;
     void draw_local(hui::gfx::DrawList & list, const hui::gfx::Rect & area) const;
     void draw_suggested(hui::gfx::DrawList & list, const hui::gfx::Rect & area) const;

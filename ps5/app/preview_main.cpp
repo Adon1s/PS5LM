@@ -55,6 +55,10 @@ float g_loading = -1;  // >= 0: draw the loading state at this progress
 bool  g_decision = false;  // d1 Omni 600M instead of Qwen 3.8
 bool  g_empty = false;     // nothing loaded
 std::string g_phase;       // the app still starting
+// PS5LM Lean: Home's other states.
+bool  g_fresh = false;       // seconds after the start: no sensor read yet, no history
+bool  g_no_replies = false;  // ready, nothing asked yet but the app's own vision warm-up
+bool  g_failed = false;      // one request ended in an error
 
 ps5lm::Live sample(float seconds, bool generating) {
     ps5lm::Live L;
@@ -72,7 +76,7 @@ ps5lm::Live sample(float seconds, bool generating) {
     L.args = { "-m", L.model_file, "-ngl", "999", "-fit", "off", "-lm", "none", "-c", "65536", "-fa", "on",
                "-ctk", "q4_0", "-ctv", "q4_0", "-b", "256", "-ub", "64", "-np", "1", "-ctxcp", "1", "-cram", "0",
                "--host", "0.0.0.0", "--port", "8081", "--temp", "0.6", "--top-p", "0.95", "--top-k", "20",
-               "--min-p", "0", "--metrics" };
+               "--min-p", "0", "--metrics", "--mmproj", "/data/PS5LM/models/mmproj-Qwen3.8-27B-F16.gguf" };
     L.soc_temp    = 61;
     L.cpu_temp    = 54;
     L.soc_power_w = 86;
@@ -229,6 +233,59 @@ ps5lm::Live sample(float seconds, bool generating) {
         L.free_gib = 11.79 - g_loading * (L.model_gib + L.kv_gib);
         L.gen_tps = 0;
         L.gpu_busy = 0;
+    }
+    if (g_fresh) {
+        L.soc_temp = L.cpu_temp = -1000;
+        L.soc_power_w = 0;
+        L.cpu_ghz = 0;
+        L.fan = -1;
+        L.energy_wh = 0;
+        L.uptime_s = 4 + seconds;
+        L.temps.clear();
+        L.temp_history.clear();
+        L.power_history.clear();
+        L.gpu_history.clear();
+        L.cpu_history.clear();
+        L.gen_history.clear();
+        L.temp_hour.clear();
+        L.power_hour.clear();
+        L.gpu_hour.clear();
+        L.cpu_hour.clear();
+        L.activity.clear();
+        L.served = L.requests = L.tokens = L.prompt_tokens = 0;
+        L.cpu_use = 0.31f;
+    }
+    if (g_no_replies) {
+        // The TV after a start with the 27B (lean.13, 2026-11-11): only the app's
+        // own vision warm-up has run, which the feed and the counts leave out.
+        L.activity.clear();
+        ps5lm::Exchange w;
+        w.id = 1; w.client = "127.0.0.1"; w.path = "/v1/chat/completions"; w.status = 200; w.seconds = 21.0;
+        w.asked = "[image] Warm-up."; w.answered = "OK";
+        L.activity.push_back(w);
+        L.served = 0;  // stats.cpp leaves the warm-up out
+        L.requests = 1;
+        L.prompt_tokens = 1337;
+        L.tokens = 1;
+        L.ctx_used = 1337;
+        L.uptime_s = 64 + seconds;
+        L.energy_wh = 0.31;
+        L.gen_history.assign(120, 0.0f);
+        for (size_t i = 0; i < L.gpu_history.size(); ++i) {
+            L.gpu_history[i] = i > 70 && i < 92 ? 0.95f : 0.02f;  // the warm-up, about 20 s of GPU
+            L.power_history[i] = i > 70 && i < 92 ? 84.0f : 24.0f;
+            L.temp_history[i] = i > 70 ? 50.0f + std::min(8.0f, (float) (i - 70) * 0.4f) : 49.0f;
+            L.cpu_history[i] = 0.02f;
+        }
+        L.soc_temp = L.temp_history.back();
+        L.soc_power_w = L.power_history.back();
+    }
+    if (g_failed) {
+        ps5lm::Exchange f;
+        f.id = 15; f.client = "192.168.1.31"; f.path = "/v1/messages"; f.status = 400; f.seconds = 0.1;
+        f.asked = "Summarise this repository";
+        f.answered = "The request asks for 70,412 tokens; the context holds 65,536";
+        L.activity.push_back(f);
     }
     return L;
 }
@@ -397,8 +454,10 @@ int main(int argc, char ** argv) {
     using A = hui::Action;
     g_loading = 0;
     g_phase = "Opening the GPU and reading the models";
+    g_fresh = true;  // PS5LM Lean: seconds in, nothing read yet
     step(50, {}, false);
     shot("00-home-starting");
+    g_fresh = false;
     g_phase.clear();
     g_loading = 0.45f;
     step(90, {}, false);
@@ -406,8 +465,14 @@ int main(int argc, char ** argv) {
     g_loading = -1;
     step(120, {}, true);
     shot("01-home");
+    g_failed = true;  // PS5LM Lean: one request refused, for the error count
     step(60, {}, false);
     shot("02-home-idle");
+    g_failed = false;
+    g_no_replies = true;
+    step(60, {}, false);
+    shot("02b-home-no-replies");
+    g_no_replies = false;
     g_decision = true;
     step(60, {}, true);
     shot("03-home-decision");

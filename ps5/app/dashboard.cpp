@@ -1189,12 +1189,14 @@ void Dashboard::draw_status(gfx::DrawList & l) const {
     const float y = 72;
     float w = put(l, f.semibold, "PS5", kLeft, y, 28, kInk);
     put(l, f.semibold, "LM", kLeft + w, y, 28, kBlue);
-    // Right to left: how long it has been up, power, temperature.
+    // Right to left: how long it has been up, power, temperature. PS5LM Lean:
+    // Home shows the last two with the other readings.
     std::vector<std::string> items;
-    if (live_.soc_temp > -100) {
+    const bool readings = page_ != kHomePage;
+    if (readings && live_.soc_temp > -100) {
         items.push_back(format("%.0f\xC2\xB0" "C", live_.soc_temp));
     }
-    if (live_.soc_power_w > 0) {
+    if (readings && live_.soc_power_w > 0) {
         items.push_back(format("%.0f W", live_.soc_power_w));
     }
     if (live_.uptime_s > 0) {
@@ -1312,39 +1314,220 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
 
 // ---- drawing: Home -------------------------------------------------------------------
 
+namespace {
+
+// PS5LM Lean: Home is the chat first. The requests take the right two thirds
+// at a size read from a couch; the model, its speed, the memory and the
+// console's readings stand in a rail on the left.
+constexpr float kHomeRailW = 508.0f;   // the rail's width, from kLeft
+constexpr float kHomeGap = 44.0f;      // between the rail and the chat
+constexpr float kChatSize = 24.0f;     // the chat's text
+constexpr int   kNewestLines = 14;     // the newest answer's lines, at most
+
+// A console reading on Home: its value now and its last two minutes.
+struct Vital {
+    const char *               name;
+    std::string                value;   // empty: not read yet
+    const std::vector<float> * series;  // the last two minutes, or null
+    bool                       share;   // the series runs from 0 to 1
+    float                      bar;     // 0..1: a bar instead of a line (the fan keeps no history), else < 0
+};
+
+std::vector<Vital> vitals_of(const Live & L) {
+    const auto degrees = [](float t) { return format("%.0f\xC2\xB0" "C", t); };
+    return {
+        { "Temperature", L.soc_temp > -100 ? degrees(L.soc_temp) : std::string(), &L.temp_history, false, -1 },
+        { "Power", L.soc_power_w > 0 ? format("%.0f W", L.soc_power_w) : std::string(), &L.power_history, false, -1 },
+        { "GPU busy", format("%.0f%%", 100.0 * L.gpu_busy), &L.gpu_history, true, -1 },
+        { "CPU use", format("%.0f%%", 100.0 * L.cpu_use), &L.cpu_history, true, -1 },
+        { "Fan", L.fan >= 0 ? format("%.0f%%", 100.0 * L.fan) : std::string(), nullptr, true, L.fan },
+        { "Energy since start", L.soc_power_w > 0 || L.energy_wh > 0 ? format("%.1f Wh", L.energy_wh) : std::string(), nullptr,
+          false, -1 },
+    };
+}
+
+// A small trend line: the last two minutes in 40 points of 3 seconds, the
+// newest at the right edge and dotted, scaled to what it saw (a share from 0
+// to 100%). A history shorter than two minutes fills only the right part.
+void spark(gfx::DrawList & l, const std::vector<float> & v, const Rect & g, bool share) {
+    constexpr int    kPoints = 40;
+    constexpr size_t kGroup = 3;
+    float pts[kPoints];  // newest first
+    int   n = 0;
+    for (size_t end = v.size(); end > 0 && n < kPoints;) {
+        const size_t begin = end > kGroup ? end - kGroup : 0;
+        float sum = 0;
+        for (size_t i = begin; i < end; ++i) {
+            sum += v[i];
+        }
+        pts[n++] = sum / (float) (end - begin);
+        end = begin;
+    }
+    l.line(g.x, g.y + g.h, g.x + g.w, g.y + g.h, 1.0f, kHair);
+    if (n < 2) {
+        return;
+    }
+    float lo = pts[0], hi = pts[0];
+    for (int i = 1; i < n; ++i) {
+        lo = std::min(lo, pts[i]);
+        hi = std::max(hi, pts[i]);
+    }
+    if (share) {
+        lo = 0;
+        hi = 1;
+    } else {
+        const float pad = std::max(2.0f, (hi - lo) * 0.2f);
+        lo -= pad;
+        hi += pad;
+    }
+    const float step = g.w / (float) (kPoints - 1);
+    const auto at = [&](float x) { return g.y + g.h - tween::clamp01((x - lo) / (hi - lo)) * g.h; };
+    for (int i = 1; i < n; ++i) {
+        l.line(g.x + g.w - step * (float) (i - 1), at(pts[i - 1]), g.x + g.w - step * (float) i, at(pts[i]), 2.0f,
+               kInk.with_alpha(0.8f));
+    }
+    l.circle(g.x + g.w, at(pts[0]), 4, kInk);
+}
+
+// One reading on a row: its name, its trend line (the fan's duty as a bar),
+// its value now.
+void vital_row(gfx::DrawList & l, const ui::Fonts & f, const Vital & v, float x, float w, float y) {
+    put(l, f.regular, v.name, x, y, 22, kInk2);
+    if (v.value.empty()) {
+        put(l, f.regular, "Not read yet", x + w, y, 20, kInk3, gfx::Align::right);
+        return;
+    }
+    put(l, f.regular, v.value, x + w, y, 24, kInk, gfx::Align::right);
+    const Rect g{ x + 160, y - 24, w - 160 - 100, 28 };
+    if (v.bar >= 0) {
+        const float by = g.y + g.h - 8;
+        l.rounded_rect({ g.x, by, g.w, 6 }, 3, kHair);
+        l.rounded_rect({ g.x, by, std::max(6.0f, g.w * tween::clamp01(v.bar)), 6 }, 3, kInk.with_alpha(0.8f));
+    } else if (v.series) {
+        spark(l, *v.series, g, v.share);
+    }
+}
+
+// The latest requests the feed keeps (six), in two numbers: how many failed,
+// and the typical time of the rest (the median), < 0 before any finished.
+struct RequestSummary {
+    int    failed = 0;
+    double typical = -1;
+};
+
+RequestSummary summary_of(const Live & L) {
+    RequestSummary s;
+    std::vector<double> t;
+    for (const auto & e : L.activity) {
+        if (is_warm_up(e) || e.status == 0) {
+            continue;
+        }
+        if (e.status >= 400) {
+            ++s.failed;
+        } else {
+            t.push_back(e.seconds);
+        }
+    }
+    if (!t.empty()) {
+        std::sort(t.begin(), t.end());
+        const size_t m = t.size() / 2;
+        s.typical = t.size() % 2 ? t[m] : 0.5 * (t[m - 1] + t[m]);
+    }
+    return s;
+}
+
+// The model's one large number: its speed while it serves (the last reply's
+// when idle), a decision model's time per decision, the load's progress.
+struct Hero {
+    float       value = 0;
+    std::string unit;   // "tokens per second"
+    std::string note;   // "last reply", or how much of the load is done
+    bool        known = true;
+};
+
+Hero hero_of(const Live & L, float load_shown) {
+    Hero h;
+    if (L.state == ServerState::loading) {
+        h.value = load_shown * 100.0f;
+        h.unit = "% on the GPU";
+        const double total = L.model_gib + L.kv_gib;
+        if (total > 0) {
+            h.note = format("%.1f", load_shown * total) + " of " + gb(total);
+        }
+    } else if (!L.decision.empty()) {
+        // Time per decision (one question answered) over the latest requests:
+        // what a decision model is judged by, as Ollaya reports it.
+        double seconds = 0;
+        int decisions = 0;
+        for (const auto & e : L.activity) {
+            if (e.status == 200 && e.questions > 0) {
+                seconds += e.seconds;
+                decisions += e.questions;
+            }
+        }
+        h.value = decisions ? (float) (1000.0 * seconds / decisions) : 0;
+        h.unit = "ms per decision";
+        h.known = decisions > 0;
+    } else {
+        h.value = L.gen_tps;
+        h.unit = "tokens per second";
+        h.known = L.gen_tps > 0;
+        if (!h.known) {
+            // Idle: the last reply's speed, quieter.
+            for (auto it = L.gen_history.rbegin(); it != L.gen_history.rend(); ++it) {
+                if (*it > 0) {
+                    h.value = *it;
+                    h.note = "last reply";
+                    h.known = true;
+                    break;
+                }
+            }
+        }
+    }
+    return h;
+}
+
+}  // namespace
+
 void Dashboard::draw_home(gfx::DrawList & l) const {
     const ui::Fonts & f = fonts_;
-    const bool loaded = !live_.model_label.empty();
+    const bool loaded = !live_.model_label.empty() && live_.state != ServerState::no_model;
     const bool decision = !live_.decision.empty();
+    const float x = kLeft, w = kHomeRailW;  // the rail
+    const float hero_y = 416;               // the large number's baseline
+    const Rect  tr{ x, 438, w, 44 };        // the speed over two minutes, or the load's cells
 
-    // Left: the model.
-    if (!loaded || live_.state == ServerState::no_model) {
-        put(l, f.regular, "Nothing is loaded", kLeft, 260, 26, kInk2);
-        put(l, f.regular, "Choose a model", kLeft, 340, 64, kInk);
-        put(l, f.regular, "It runs on the PS5's GPU and answers every device on your network.", kLeft, 400, 24, kInk2);
-        put(l, f.regular, format("%.0f models on this PS5", (double) live_.models.size()), kLeft, 444, 24, kInk3);
-        if (!live_.address.empty()) {
-            put(l, f.regular, "On your network", kLeft, 540, 22, kInk3);
-            put(l, f.regular, "http://" + live_.address, kLeft, 586, 32, kInk2);
+    // Left, the rail: the model.
+    if (!loaded) {
+        put(l, f.regular, "Nothing is loaded", x, 164, 22, kInk2);
+        put(l, f.regular, "Choose a model", x, 216, 44, kInk);
+        float y = 254;
+        for (const auto & s : wrap(f.regular, "It runs on the PS5's GPU and answers every device on your network.", 20, w)) {
+            put(l, f.regular, s, x, y, 20, kInk2);
+            y += 28;
         }
-        draw_memory(l, kLeft, 868, 860);  // PS5LM Lean: what a model would get, and the screen's share
+        put(l, f.regular, format("%.0f models on this PS5", (double) live_.models.size()), x, y + 6, 20, kInk3);
+        if (!live_.address.empty()) {
+            put(l, f.regular, "On your network", x, hero_y - 40, 20, kInk3);
+            put(l, f.regular, "http://" + live_.address, x, hero_y, 28, kInk2);
+        }
     } else {
         std::string name, build;
         split_name(live_.model_label, &name, &build);
-        put(l, f.regular, !live_.phase.empty() ? "Starting" : decision ? "Decision model" : "Language model", kLeft, 250, 26,
-            kInk2);
-        put(l, f.regular, f.regular.font->fit(name, 64, 860), kLeft, 326, 64, kInk);
+        put(l, f.regular, !live_.phase.empty() ? "Starting" : decision ? "Decision model" : "Language model", x, 164, 22, kInk2);
+        put(l, f.regular, f.regular.font->fit(name, 44, w), x, 216, 44, kInk);
         std::string detail = build;
+        const auto add = [&](const std::string & s) { detail += (detail.empty() ? "" : "   ") + s; };
         if (live_.ctx > 0) {
-            detail += (detail.empty() ? "" : "    ") + format("%.0fk context", live_.ctx / 1024.0);
+            add(format("%.0fk context", live_.ctx / 1024.0));
         }
         if (live_.model_gib > 0) {
-            detail += (detail.empty() ? "" : "    ") + gb(live_.model_gib);
+            add(gb(live_.model_gib));
         }
         if (std::find(live_.args.begin(), live_.args.end(), "--mmproj") != live_.args.end()) {
-            detail += (detail.empty() ? "" : "    ") + std::string("reads images");  // PS5LM Lean
+            add("reads images");
         }
-        put(l, f.regular, detail, kLeft, 372, 24, kInk3);
+        put(l, f.regular, f.regular.font->fit(detail, 20, w), x, 250, 20, kInk3);
 
         // The state, as a car shows its gear: one word, coloured only when it matters.
         const char * word = live_.state == ServerState::loading ? "Loading"
@@ -1353,121 +1536,119 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
         const Color dot = live_.state == ServerState::failed ? kRed
                         : live_.state == ServerState::generating ? kBlue
                         : live_.state == ServerState::loading ? kInk2.with_alpha(0.5f + 0.5f * std::sin(clock_ * 4.0f)) : kGreen;
-        l.circle(kLeft + 7, 432, 7, dot);
-        put(l, f.regular, word, kLeft + 26, 441, 26, kInk);
+        l.circle(x + 7, 290, 7, dot);
+        put(l, f.regular, word, x + 26, 298, 24, kInk);
         // Where the network reaches it, on the same line.
         if (!live_.address.empty()) {
-            put(l, f.regular, "http://" + live_.address, kLeft + 860, 441, 26, kInk2, gfx::Align::right);
+            put(l, f.regular, "http://" + live_.address, x + w, 298, 22, kInk2, gfx::Align::right);
         }
+        l.line(x, 324, x + w, 324, 1.5f, kHair);
 
         // The large number: speed while serving, progress while loading.
-        float big = 0;
-        std::string unit;
-        bool known = true;
-        if (live_.state == ServerState::loading) {
-            big = load_shown_ * 100.0f;
-            unit = "% on the GPU";
-        } else if (decision) {
-            // Time per decision (one question answered) over the latest requests:
-            // what a decision model is judged by, as Ollaya reports it.
-            double seconds = 0;
-            int decisions = 0;
-            for (const auto & e : live_.activity) {
-                if (e.status == 200 && e.questions > 0) {
-                    seconds += e.seconds;
-                    decisions += e.questions;
-                }
-            }
-            big = decisions ? (float) (1000.0 * seconds / decisions) : 0;
-            unit = "ms per decision";
-            known = decisions > 0;
-        } else {
-            big = live_.gen_tps;
-            unit = "tokens per second";
-            known = live_.gen_tps > 0;
-            if (!known) {
-                // Idle: the last reply's speed, quieter.
-                for (auto it = live_.gen_history.rbegin(); it != live_.gen_history.rend(); ++it) {
-                    if (*it > 0) {
-                        big = *it;
-                        unit = "tokens per second, last reply";
-                        known = true;
-                        break;
-                    }
-                }
-            }
-        }
+        const Hero h = hero_of(live_, load_shown_);
         const bool quiet = live_.state != ServerState::generating && live_.state != ServerState::loading;
-        if (!known) {
-            // PS5LM Lean: nothing answered yet, said in words (a lone dash and
-            // "tokens per second" read as broken).
-            put(l, f.display, decision ? "No decisions yet" : "No replies yet", kLeft, 610, 72, kInk2);
-            put(l, f.regular, decision ? "The time per decision shows here" : "The speed of each reply shows here", kLeft, 660, 26,
-                kInk3);
+        if (!h.known) {
+            // Nothing answered yet, said in words (a lone dash and "tokens per
+            // second" read as broken).
+            put(l, f.display, decision ? "No decisions yet" : "No replies yet", x, hero_y - 24, 56, kInk2);
+            put(l, f.regular, decision ? "The time per decision shows here" : "The speed of each reply shows here", x, hero_y + 8,
+                20, kInk3);
         } else {
-            const std::string number = big >= 100 || live_.state == ServerState::loading ? format("%.0f", big) : format("%.1f", big);
-            const float nw = put(l, f.display, number, kLeft - 8, 660, 232, quiet ? kInk2 : kInk);
-            put(l, f.regular, unit, kLeft + nw + 12, 660, 26, kInk2);
+            const std::string number = h.value >= 100 || live_.state == ServerState::loading ? format("%.0f", h.value)
+                                                                                             : format("%.1f", h.value);
+            const float nw = put(l, f.display, number, x - 3, hero_y, 96, quiet ? kInk2 : kInk);
+            put(l, f.regular, h.unit, x + nw + 14, h.note.empty() ? hero_y : hero_y - 28, 22, kInk2);
+            if (!h.note.empty()) {
+                put(l, f.regular, h.note, x + nw + 14, hero_y, 20, kInk3);
+            }
         }
-
         if (live_.state == ServerState::loading) {
             // The model's memory as cells filling column by column, the newest
             // lit and a slow wave over the rest; before the load starts, a light
             // sweeping the empty ones. It never looks stopped.
-            constexpr int cols = 60, rows = 4;
-            const float cw = (860.0f - 3.0f * (cols - 1)) / cols, ch = 18;
+            constexpr int cols = 30, rows = 4;
+            const float cw = (w - 3.0f * (cols - 1)) / cols, ch = (tr.h - 3.0f * (rows - 1)) / rows;
             const int filled = (int) (load_shown_ * cols * rows);
             const float sweep = (0.5f + 0.5f * std::sin(clock_ * 1.7f)) * (cols - 1);
             for (int c = 0; c < cols; ++c) {
                 for (int r = 0; r < rows; ++r) {
                     const int i = c * rows + r;
-                    const Color cell = i < filled ? kInk.with_alpha(0.45f + 0.4f * (0.5f + 0.5f * std::sin(clock_ * 3.0f - (float) c * 0.22f)))
+                    const Color cell = i < filled ? kInk.with_alpha(0.45f + 0.4f * (0.5f + 0.5f * std::sin(clock_ * 3.0f - (float) c * 0.44f)))
                                      : i == filled ? kBlue.with_alpha(0.6f + 0.4f * std::sin(clock_ * 8.0f))
-                                     : filled == 0 ? gfx::mix(kHair, kInk3, std::max(0.0f, 1.0f - std::fabs((float) c - sweep) / 4.0f))
+                                     : filled == 0 ? gfx::mix(kHair, kInk3, std::max(0.0f, 1.0f - std::fabs((float) c - sweep) / 3.0f))
                                                    : kHair;
-                    l.rounded_rect({ kLeft + (cw + 3) * (float) c, 700 + (ch + 3) * (float) r, cw, ch }, 3, cell);
+                    l.rounded_rect({ x + (cw + 3) * (float) c, tr.y + (ch + 3) * (float) r, cw, ch }, 3, cell);
                 }
             }
-            const double total = live_.model_gib + live_.kv_gib;
             put(l, f.regular,
-                !live_.phase.empty() ? live_.phase
-                : live_.load_progress < 0.985f ? std::string("Copying the weights into GPU memory") : std::string("Preparing the context"),
-                kLeft, 822, 22, kInk2);
-            if (total > 0) {
-                put(l, f.regular, format("%.1f", load_shown_ * total) + " of " + gb(total), kLeft + 860, 822, 22, kInk3,
-                    gfx::Align::right);
-            }
+                f.regular.font->fit(!live_.phase.empty() ? live_.phase
+                                    : live_.load_progress < 0.985f ? std::string("Copying the weights into GPU memory")
+                                                                   : std::string("Preparing the context"),
+                                    20, w),
+                x, tr.y + tr.h + 26, 20, kInk2);
         } else if (!decision) {
-            trace(l, live_.gen_history, { kLeft, 702, 860, 100 }, kInk.with_alpha(0.75f));
+            trace(l, live_.gen_history, tr, kInk.with_alpha(0.75f));
         }
-
-        // Two quiet meters: what the model holds (and the screen, PS5LM Lean),
-        // and how much of its context is used.
-        const float my = 868;
-        draw_memory(l, kLeft, my, 400);
-        put(l, f.regular, "Context", kLeft + 460, my, 22, kInk2);
-        put(l, f.regular, thousands(live_.ctx_used) + " of " + format("%.0fk", live_.ctx / 1024.0), kLeft + 860, my, 22, kInk,
-             gfx::Align::right);
-        meter(l, kLeft + 460, my + 16, 400, live_.ctx > 0 ? (float) live_.ctx_used / (float) live_.ctx : 0, kInk.with_alpha(0.8f));
     }
 
-    // Right: what the network asks of it, as it happens. A single panel, as a
-    // car gives the map, with what it has done since it started at the top,
-    // like a trip meter.
-    const Rect p{ 1056, 196, kRight - 1056, 728 };
+    // What the model holds and the screen's share, and how much of the context
+    // is used.
+    l.line(x, 522, x + w, 522, 1.5f, kHair);
+    draw_memory(l, x, 562, w);
+    if (loaded) {
+        put(l, f.regular, "Context", x, 658, 22, kInk2);
+        put(l, f.regular, thousands(live_.ctx_used) + " of " + format("%.0fk", live_.ctx / 1024.0), x + w, 658, 22, kInk,
+            gfx::Align::right);
+        meter(l, x, 674, w, live_.ctx > 0 ? (float) live_.ctx_used / (float) live_.ctx : 0, kInk.with_alpha(0.8f));
+    }
+
+    // The console's readings, each with its last two minutes: what the Console
+    // page charts, at a glance.
+    l.line(x, 700, x + w, 700, 1.5f, kHair);
+    float y = 742;
+    for (const auto & v : vitals_of(live_)) {
+        vital_row(l, f, v, x, w, y);
+        y += 36;
+    }
+
+    const float cx = x + w + kHomeGap;
+    draw_requests(l, { cx, 124, kRight - cx, 808 });
+}
+
+// Right: what the network asks of it, as it happens. A single panel, as a car
+// gives the map, with what it has done since it started at the top, like a
+// trip meter, and the latest requests' typical time and failures.
+void Dashboard::draw_requests(gfx::DrawList & l, const Rect & p) const {
+    const ui::Fonts & f = fonts_;
+    const RequestSummary s = summary_of(live_);
     l.rounded_rect(p, 24, kSurface);
     const float x = p.x + 56, w = p.w - 112;
     put(l, f.regular, "Requests", x, p.y + 62, 22, kInk2);
-    std::string trip = thousands(live_.served) + " answered    " + thousands(live_.prompt_tokens) + " tokens in";
-    if (!decision) {
-        trip += "    " + thousands(live_.tokens) + " out";
+    std::vector<std::pair<std::string, Color>> trip = { { thousands(live_.served) + " answered", kInk2 } };
+    if (s.typical >= 0) {
+        trip.push_back({ format(s.typical < 10 ? "%.1f s typical" : "%.0f s typical", s.typical), kInk2 });
     }
-    put(l, f.regular, trip, x + w, p.y + 62, 20, kInk3, gfx::Align::right);
+    trip.push_back({ thousands(live_.prompt_tokens) + " tokens in", kInk3 });
+    if (live_.decision.empty()) {
+        trip.push_back({ thousands(live_.tokens) + " out", kInk3 });
+    }
+    if (s.failed > 0) {
+        trip.push_back({ format("%.0f failed", (double) s.failed), kRed });
+    }
+    float rx = x + w;
+    for (auto it = trip.rbegin(); it != trip.rend(); ++it) {
+        rx -= put(l, f.regular, it->first, rx, p.y + 62, 20, it->second, gfx::Align::right) + 28;
+    }
     l.line(x, p.y + 90, x + w, p.y + 90, 1.5f, kHair);
+    draw_feed(l, x, w, p.y + 110, p.y + p.h - 26);
+}
 
-    // The conversation: what each device asked, on the right as a message
-    // sent, and the model's answer under it on the left, newest at the bottom
-    // as in any chat.
+// The conversation: what each device asked, on the right as a message sent,
+// and the model's answer under it on the left, newest at the bottom as in any
+// chat.
+void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float bottom) const {
+    const ui::Fonts & f = fonts_;
+    constexpr float ts = kChatSize, ask_pitch = ts + 8, answer_pitch = ts + 9;  // a question's lines, an answer's
     struct Turn {
         const Exchange *         e;
         std::vector<std::string> asked, answered;
@@ -1482,24 +1663,26 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
             lines.erase(lines.begin(), lines.end() - (long) keep);  // streaming: the newest lines
         } else {
             lines.resize(keep);
-            lines.back() = f.regular.font->fit(lines.back() + " \xE2\x80\xA6", 22, width);
+            lines.back() = f.regular.font->fit(lines.back() + " \xE2\x80\xA6", ts, width);
         }
     };
-    const float top = p.y + 112, bottom = p.y + p.h - 30;
     std::vector<Turn> turns;
     float total = 0;
     for (auto it = live_.activity.rbegin(); it != live_.activity.rend(); ++it) {
-        // PS5LM Lean: the app's own vision warm-up (vision_warmup.cpp) is not a
-        // request anyone made; it stays out of the chat.
-        if (it->client.rfind("127.0.0.1", 0) == 0 && it->asked == "[image] Warm-up.") {
+        // The app's own vision warm-up is not a request anyone made; it stays
+        // out of the chat.
+        if (is_warm_up(*it)) {
             continue;
         }
         const bool newest = turns.empty();
-        Turn t{ &*it, wrap(f.regular, it->asked.empty() ? std::string(kDash) : it->asked, 22, bubble - 40),
-                wrap(f.regular, it->answered, 22, w), 0 };
+        Turn t{ &*it, wrap(f.regular, it->asked.empty() ? std::string(kDash) : it->asked, ts, bubble - 40),
+                wrap(f.regular, it->answered, ts, w), 0 };
         clip(t.asked, newest ? 3 : 2, false, bubble - 40);
-        clip(t.answered, newest ? 6 : 3, it->status == 0, w);
-        t.h = 26 + (float) t.asked.size() * 30 + 20 + 14 + (float) std::max<size_t>(1, t.answered.size()) * 31 + 34 + 26;
+        // The newest answer gets the lines the panel has left under its question.
+        const float room = bottom - top - (26 + (float) t.asked.size() * ask_pitch + 20 + 14 + 34 + 26);
+        clip(t.answered, newest ? (size_t) std::clamp(std::floor(room / answer_pitch), 1.0f, (float) kNewestLines) : 3,
+             it->status == 0, w);
+        t.h = 26 + (float) t.asked.size() * ask_pitch + 20 + 14 + (float) std::max<size_t>(1, t.answered.size()) * answer_pitch + 34 + 26;
         total += t.h;
         turns.push_back(std::move(t));
         if (total > bottom - top) {
@@ -1507,9 +1690,9 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
         }
     }
     if (turns.empty()) {
-        put(l, f.regular, "Requests from other devices appear here, as a chat.", x, top + 40, 22, kInk3);
+        put(l, f.regular, "Requests from other devices appear here, as a chat.", x, top + 40, ts, kInk3);
         if (live_.state == ServerState::ready || live_.state == ServerState::generating) {
-            put(l, f.regular, "Square sends a demo, Triangle a message of your own.", x, top + 76, 22, kInk3);
+            put(l, f.regular, "Square sends a demo, Triangle a message of your own.", x, top + 40 + ts + 14, ts, kInk3);
         }
     }
     float y = bottom - total;
@@ -1519,19 +1702,19 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
         const bool fault = e.status >= 400;
         const std::string who = e.client.rfind("127.0.0.1", 0) == 0 ? std::string("This PS5") : e.client;
         if (y >= top) {
-            put(l, f.regular, who + "    " + e.path, x + w, y + 18, 17, kInk3, gfx::Align::right);
+            put(l, f.regular, who + "    " + e.path, x + w, y + 19, 20, kInk3, gfx::Align::right);
         }
         y += 26;
         float bw = 0;
         for (const auto & s : t->asked) {
-            bw = std::max(bw, f.regular.measure(s, 22));
+            bw = std::max(bw, f.regular.measure(s, ts));
         }
         bw += 40;
-        const float bh = (float) t->asked.size() * 30 + 20;
+        const float bh = (float) t->asked.size() * ask_pitch + 20;
         if (y >= top) {
             l.rounded_rect({ x + w - bw, y, bw, bh }, 20, kBlue);
             for (size_t i = 0; i < t->asked.size(); ++i) {
-                put(l, f.regular, t->asked[i], x + w - bw + 20, y + 32 + 30.0f * (float) i, 22, kInk);
+                put(l, f.regular, t->asked[i], x + w - bw + 20, y + ts + 10 + ask_pitch * (float) i, ts, kInk);
             }
         }
         y += bh + 14;
@@ -1542,21 +1725,21 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
             }
         }
         for (size_t i = 0; i < t->answered.size(); ++i) {
-            if (y + 31.0f * (float) i >= top) {
-                put(l, f.regular, t->answered[i], x, y + 22 + 31.0f * (float) i, 22, fault ? kRed : kInk);
+            if (y + answer_pitch * (float) i >= top) {
+                put(l, f.regular, t->answered[i], x, y + ts + answer_pitch * (float) i, ts, fault ? kRed : kInk);
             }
         }
         if (t->answered.empty() && !running && y >= top) {
-            put(l, f.regular, kDash, x, y + 22, 22, kInk3);
+            put(l, f.regular, kDash, x, y + ts, ts, kInk3);
         }
-        y += (float) std::max<size_t>(1, t->answered.size()) * 31 + 6;
+        y += (float) std::max<size_t>(1, t->answered.size()) * answer_pitch + 6;
         std::string meta = running ? "Answering" : fault ? format("Error %.0f", (double) e.status)
                                                          : format(e.seconds < 10 ? "%.1f s" : "%.0f s", e.seconds);
         if (!running && !fault && e.questions > 0) {
             meta += format(", %.0f ms per decision", 1000.0 * e.seconds / e.questions);
         }
         if (y >= top) {
-            put(l, f.regular, meta, x, y + 22, 17, fault ? kRed : kInk3);
+            put(l, f.regular, meta, x, y + 23, 20, fault ? kRed : kInk3);
         }
         y += 28 + 26;
     }
