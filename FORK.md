@@ -191,3 +191,8 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     the mute button gives exact zeros and silent state 0x4; the model ran 20.96 tokens a second while recording
     against 21.00 alone; no memory cost (1,084 MiB when ready, flexible 119 free, as lean.16); works with the
     screen on. Write-up: `docs/handoffs/RESULT-ps5lm-mic-probe-20261111.md` in the RenoIntel tree.
+  - Checked on the console as lean.18 (`7b07883`, installed over the probe build): the new Home shows on the TV
+    ("0 answered" with the warm-up left out; its tokens still count in the token totals), the `mic` request
+    recorded 3 s (16 kHz, 0 failed reads, every read 16.0 ms) to `mic-test-lean18.wav`. Screen on: 712 / 725 MiB when
+    ready, 270 / 533 after the warm-up. Standing setting (screen off): 1,084 / 1,096 when ready, 658 / 905 after the
+    warm-up, flexible pool 119 MiB free, the same as lean.16.
