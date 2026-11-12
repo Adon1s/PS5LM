@@ -27,4 +27,13 @@ void probe_read(std::string path);
 // never takes memory from a running model.
 void probe_memory(bool model_loaded);
 
+// PS5LM Lean, probe/mic (mic_probe.cpp): records from the controller's
+// microphone through libSceAudioIn and writes mic-test.wav in the data folder,
+// with every call's return code and each second's level in app.log. `spec` is
+// the request file's one word: "-" scans the port types and rates a title may
+// open and records 5 s from the first that works; "t=1,f=16000,n=256,p=0,s=5"
+// records from that port (type, rate, samples a read, format, seconds);
+// "out=name" writes mic-test-name.wav instead.
+void probe_mic(std::string spec);
+
 }  // namespace ps5lm

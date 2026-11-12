@@ -1859,6 +1859,8 @@ int main(int, char **) {
                 std::thread(probe_read, f).detach();
             } else if (!take_request_file(data_path("bench-memory")).empty()) {
                 std::thread(probe_memory, !models.running.empty()).detach();
+            } else if (std::string mic = take_request_file(data_path("mic")); !mic.empty()) {
+                std::thread(probe_mic, mic).detach();  // PS5LM Lean, probe/mic: a recording from the controller
             } else if (std::string q = take_request_file(data_path("search")); !q.empty()) {
                 market.search(q == "-" ? std::string() : q);  // a query typed on the PC
             }

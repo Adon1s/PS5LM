@@ -145,6 +145,7 @@ cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/report.cpp" -o "$
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/storage.cpp" -o "$obj/storage.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/log_sink.cpp" -o "$obj/log_sink.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/probes.cpp" -o "$obj/probes.o"
+cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/mic_probe.cpp" -o "$obj/mic_probe.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/fetch.cpp" -o "$obj/fetch.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$llama/vendor" -c "$root/ps5/app/market.cpp" -o "$obj/market.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/ftp_writer.cpp" -o "$obj/ftp_writer.o"
@@ -235,6 +236,16 @@ for lib in libSceAgc libSceAgcDriver; do
     "$root/ps5/app/ps5cc" -O2 -fPIC -c "$stub_c" -o "$obj/${lib}_stub.o"
     "$sdk/bin/prospero-lld" --shared -soname "$lib.prx" -o "$out/stubs/$lib.so" "$obj/${lib}_stub.o"
 done
+# PS5LM Lean, probe/mic: the console's audio input, libSceAudioIn. The payload
+# SDK ships no stub for it; this one names the imports ps5/app/mic_probe.cpp
+# makes (the console's own module exports them, checked by NID 2026-11-11).
+stub_c="$out/stubs/libSceAudioIn.c"
+: > "$stub_c"
+for name in sceAudioInInit sceAudioInOpen sceAudioInInput sceAudioInClose sceAudioInGetSilentState; do
+    echo "void $name(void) {}" >> "$stub_c"
+done
+"$root/ps5/app/ps5cc" -O2 -fPIC -c "$stub_c" -o "$obj/libSceAudioIn_stub.o"
+"$sdk/bin/prospero-lld" --shared -soname libSceAudioIn.sprx -o "$out/stubs/libSceAudioIn.so" "$obj/libSceAudioIn_stub.o"
 
 # shellcheck source=/dev/null
 source "$vk/tools/radv-link.sh"
@@ -253,9 +264,9 @@ mapfile -t libs < <(find "$out/llama" -name '*.a' | sort)
 "$sdk/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
     --version-script "$vk/tooling/native/app-symbols.map" --exclude-libs=ALL "${heap_link[@]}" \
     -e _start -o "$out/llvm-pie.elf" \
-    "$obj/app_crt.o" "$obj/app_cpp_runtime.o" "$obj/main.o" "$obj/display.o" "$obj/model_plan.o" "$obj/fleet_worker.o" "$obj/settings.o" "$obj/report.o" "$obj/storage.o" "$obj/log_sink.o" "$obj/probes.o" "$obj/fetch.o" "$obj/market.o" "$obj/ftp_writer.o" "$obj/heap_info.o" "$obj/vision_warmup.o" "$obj/activity.o" "$obj/sha256.o" "$obj/dashboard.o" "$obj/stats.o" \
+    "$obj/app_crt.o" "$obj/app_cpp_runtime.o" "$obj/main.o" "$obj/display.o" "$obj/model_plan.o" "$obj/fleet_worker.o" "$obj/settings.o" "$obj/report.o" "$obj/storage.o" "$obj/log_sink.o" "$obj/probes.o" "$obj/mic_probe.o" "$obj/fetch.o" "$obj/market.o" "$obj/ftp_writer.o" "$obj/heap_info.o" "$obj/vision_warmup.o" "$obj/activity.o" "$obj/sha256.o" "$obj/dashboard.o" "$obj/stats.o" \
     --start-group "${libs[@]}" "$obj/libps5lm_kit.a" "$obj/libps5app_compat.a" "${heap_lib[@]}" "$out/gl/libps5lm_gl.a" --end-group \
-    "$out/stubs/libSceAgc.so" "$out/stubs/libSceAgcDriver.so" \
+    "$out/stubs/libSceAgc.so" "$out/stubs/libSceAgcDriver.so" "$out/stubs/libSceAudioIn.so" \
     "${radv_link_inputs[@]}" \
     --as-needed "$sdk"/target/lib/*.so
 # The heap came from patches/sdk, not the stock archive: lld takes the first
@@ -271,7 +282,7 @@ if [ ${#heap_lib[@]} -gt 0 ]; then
 fi
 "$tool" link --in "$out/llvm-pie.elf" --out "$out/eboot.elf" \
     --stub-dir "$sdk/target/lib" --stub "$out/stubs/libSceAgc.so" \
-    --stub "$out/stubs/libSceAgcDriver.so" --module-sdk 0x02000009 \
+    --stub "$out/stubs/libSceAgcDriver.so" --stub "$out/stubs/libSceAudioIn.so" --module-sdk 0x02000009 \
     --companion-sdk 0x08050001 --file-name eboot.elf
 
 title_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["titleId"])' "$param")

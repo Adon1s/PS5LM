@@ -162,6 +162,7 @@ from a drive instead of holding them in memory (Qwen3.8-Flash-Next on the roadma
 | `bench-read <model file>` | Sequential reads (8 MiB, up to 2 GiB), then three seconds each of random reads of 64 KiB, 256 KiB, 1 MiB and 4 MiB with one and four threads, through the cache and with `O_DIRECT`: MB/s, reads a second, median and p99 latency |
 | `bench-memory` | The direct pool and what the system keeps of a nominal 12 GiB, its largest free block, the flexible pool; with no model loaded, also the largest block that allocates and maps, given back at once |
 | `bench-write` | Write speed by method to the data folder and a USB drive |
+| `mic [spec]` | PS5LM Lean probe (`ps5/app/mic_probe.cpp`): opens an audio-input port (libSceAudioIn) for the signed-in user, records 5 s from the controller's microphone to `mic-test.wav` in the data folder, and logs every call's return code, the port's silent state and each second's peak and average level. No spec: tries the port types and rates a title may open first. `t=1,f=16000,n=256,p=0,s=5,out=name` records from one port (type, rate, samples a read, format, seconds) to `mic-test-name.wav` |
 | `memory` | One `memory asked` line: pools, CPU heap and ggml's devices |
 | `memory each` / `memory off` | PS5LM Lean: a `memory after a request` line after every request, and `memory after the trim` after its heap trim; or no more |
 | `trim` | PS5LM Lean: trims the heap now, between a `memory before trim` and a `memory after trim` line |

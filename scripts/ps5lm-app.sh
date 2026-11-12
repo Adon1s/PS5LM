@@ -17,6 +17,8 @@
 #                                            trim after each request and every 10 s on or off
 #   scripts/ps5lm-app.sh bench-read <file>   probe: sequential and random read speed of a model file, see app.log
 #   scripts/ps5lm-app.sh bench-memory        probe: the pools and the largest block that allocates, see app.log
+#   scripts/ps5lm-app.sh mic [spec]          PS5LM Lean probe: record from the controller's microphone to mic-test.wav
+#                                            in the data folder, calls and levels in app.log (spec: ps5/app/probes.hpp)
 #   scripts/ps5lm-app.sh search <words>      search Get models from the PC
 #
 # The app is never killed: it polls /data/PS5LM/quit and leaves through
@@ -87,6 +89,7 @@ case ${1:-} in
     trim) request trim "${2:--}" ;;
     bench-read) request bench-read "${2:?a model file on the console, several GiB}" ;;
     bench-memory) request bench-memory ;;
+    mic) request mic "${2:--}" ;;
     search) request search "${2:?search words}" ;;
     press) request press "${2:?up|down|left|right|cross|circle|triangle|square|l1|r1|l2|r2}" ;;
     screenshot) screenshot "${2:-}" ;;
@@ -94,5 +97,5 @@ case ${1:-} in
     deploy) deploy ;;
     launch) launch ;;
     cycle) close; deploy; launch ;;
-    *) echo "usage: $0 close|deploy|launch|cycle|screenshot|load|unload|press|fetch|bench-write|bench-read|bench-memory|memory|trim|search" >&2; exit 2 ;;
+    *) echo "usage: $0 close|deploy|launch|cycle|screenshot|load|unload|press|fetch|bench-write|bench-read|bench-memory|mic|memory|trim|search" >&2; exit 2 ;;
 esac
