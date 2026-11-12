@@ -44,6 +44,11 @@ jobs:
           mkdir -p build
           c++ -std=c++17 -O1 ps5/app/stt_audio_test.cpp ps5/app/stt_audio.cpp -o build/stt_audio_test
           build/stt_audio_test
+      - name: Chat history fits the context (PS5LM Lean)
+        run: |
+          mkdir -p build
+          c++ -std=c++17 -O1 ps5/app/chat_history_test.cpp ps5/app/chat_history.cpp -o build/chat_history_test
+          build/chat_history_test
 
   ps5-title:
     name: Full PS5 title cross-build and static package checks
