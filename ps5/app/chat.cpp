@@ -14,6 +14,7 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -31,7 +32,7 @@ using Clock = std::chrono::steady_clock;
 using json = nlohmann::ordered_json;
 
 constexpr const char * kModel = "base.en-q5_1";   // picked on the PC and the console (RESULT-ps5lm-mic-probe §8, §11)
-constexpr int          kMaxReply = 512;            // tokens, as Home's single messages had
+constexpr int          kMinReply = 512;            // tokens: the reply always has at least this
 constexpr int          kMaxTalkSeconds = 30;       // whisper's window
 constexpr int          kThreads = 4;               // measured: 1.4-1.8 s a take beside the model
 constexpr int          kBeam = 5;
@@ -147,7 +148,10 @@ bool ChatEngine::send(const std::string & text, uint32_t n_ctx, bool spoken) {
         user.text = text;
         user.spoken = spoken || (!s_->transcript.empty() && text == s_->transcript);
         s_->turns.push_back(user);
-        const size_t first = first_turn_to_send(s_->turns, history_budget(n_ctx, kMaxReply));
+        // The history takes at most half the context (and leaves kMinReply); the reply gets the rest.
+        const int    ctx = n_ctx > 0 ? (int) n_ctx : 2048;
+        const size_t first = first_turn_to_send(s_->turns, history_budget(n_ctx, std::max(kMinReply, ctx / 2)));
+        const int    max_reply = reply_tokens(n_ctx, prompt_tokens(s_->turns, first), kMinReply);
         json         messages = json::array();
         int          dropped = 0;
         for (size_t i = 0; i < s_->turns.size(); ++i) {
@@ -171,12 +175,13 @@ bool ChatEngine::send(const std::string & text, uint32_t n_ctx, bool spoken) {
         json b;
         b["messages"] = std::move(messages);
         b["stream"] = true;
-        b["max_tokens"] = kMaxReply;
+        b["max_tokens"] = max_reply;
         b["chat_template_kwargs"] = { { "enable_thinking", false } };  // an answer on the TV in seconds
         b["user"] = kUserTag + std::to_string(seq);                     // activity.cpp routes it back here
         body = b.dump();
-        log_line("chat: message %u sent (%zu bytes, %s), %zu turns, %d older not sent, context %u\n", seq, text.size(),
-                 user.spoken ? "spoken" : "typed", s_->turns.size() - 1, dropped, n_ctx);
+        log_line("chat: message %u sent (%zu bytes, %s), %zu turns, %d older not sent, context %u, prompt ~%d tokens, "
+                 "reply up to %d\n", seq, text.size(), user.spoken ? "spoken" : "typed", s_->turns.size() - 1, dropped,
+                 n_ctx, prompt_tokens(s_->turns, first), max_reply);
     }
     std::thread([s = s_, seq, body = std::move(body)] {
         const std::string reply = http_post(s->port, "/v1/chat/completions", body, 300);

@@ -33,4 +33,12 @@ size_t first_turn_to_send(const std::vector<ChatTurn> & turns, int budget);
 // Whether a turn is sent at all (failed answers and the one being written are not).
 bool turn_is_sent(const ChatTurn & turn);
 
+// About how many tokens the request's prompt takes: the turns from `first`
+// that are sent, each with its template cost, and the generation prompt.
+int prompt_tokens(const std::vector<ChatTurn> & turns, size_t first);
+
+// The reply's limit (max_tokens): what the context has left after the prompt,
+// less a margin for the estimate, and never under `floor`.
+int reply_tokens(uint32_t n_ctx, int prompt, int floor);
+
 }  // namespace ps5lm

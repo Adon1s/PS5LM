@@ -65,6 +65,15 @@ int main() {
         CHECK(first_turn_to_send(t, 18 * 2) == 0);  // users 0 and 2 fit; 1 and 3 are not sent
         CHECK(!turn_is_sent(t[1]) && !turn_is_sent(t[3]) && turn_is_sent(t[2]));
     }
+    // The prompt's estimate and the reply's limit.
+    {
+        std::vector<ChatTurn> t = { turn(Role::user, 35), turn(Role::assistant, 35, true), turn(Role::user, 35) };
+        CHECK(prompt_tokens(t, 0) == 64 + 18 + 18);  // the failed answer is not counted
+        CHECK(prompt_tokens(t, 2) == 64 + 18);
+        CHECK(reply_tokens(2048, 100, 256) == 2048 - 100 - 32);
+        CHECK(reply_tokens(2048, 2000, 256) == 256);  // never under the floor
+        CHECK(reply_tokens(0, 100, 256) == 2048 - 100 - 32);
+    }
     if (failures) {
         std::fprintf(stderr, "chat_history_test: %d failed\n", failures);
         return 1;

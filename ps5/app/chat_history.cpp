@@ -55,4 +55,20 @@ size_t first_turn_to_send(const std::vector<ChatTurn> & turns, int budget) {
     return first;
 }
 
+int prompt_tokens(const std::vector<ChatTurn> & turns, size_t first) {
+    int used = kTemplate;
+    for (size_t i = first; i < turns.size(); ++i) {
+        if (turn_is_sent(turns[i])) {
+            used += estimate_tokens(turns[i].text) + kPerMessage;
+        }
+    }
+    return used;
+}
+
+int reply_tokens(uint32_t n_ctx, int prompt, int floor) {
+    const int ctx = n_ctx > 0 ? (int) n_ctx : 2048;
+    const int left = ctx - prompt - 32;  // the estimate's margin
+    return left > floor ? left : floor;
+}
+
 }  // namespace ps5lm
