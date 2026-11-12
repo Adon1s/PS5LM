@@ -134,6 +134,13 @@ What is changed, newest last:
     sleep is not remembered: the next start has the screen. Kept as `screen_sleep_min` in `settings.json`.
   - The PC's `screen on` is still the restart with the screen; `screen on-now` the in-place open.
   - The lean.13 depth-config request and `display.txt` are gone (the GL port ignored them).
+  - Measured on the console (Q2_K_XL + F16 projector, MiB largest / all free):
+    - Started without the screen: 1,084 / 1,096 when ready, 658 / 905 after the warm-up. Opened in place from
+      there (the path Triangle takes, asked from the PC): 273 ms, 338 / 551 with the screen up (a start with the
+      screen on leaves 304 / 533), the model serving throughout.
+    - Sleep timer at 5 minutes (set from Settings with button presses): the countdown started 5 min after the
+      last press, the screen slept 5 s later (338 / 539 -> 658 / 885), and one press of Square woke it in place in
+      197 ms (338 / 547), on the page it was on. `screen.txt` stayed `on` throughout.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
