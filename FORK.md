@@ -263,3 +263,7 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - Not right yet: math shows as raw LaTeX, code lines lose their indentation, base.en is English only, and a stray
     first word sometimes appears. Write-up: section 12 of `docs/handoffs/RESULT-ps5lm-mic-probe-20261111.md` in the
     RenoIntel tree.
+  - Checked on the console as lean.21 (`49d89ac`, installed over chat.2), on the new standing setting (v12 8k, screen
+    on): 1,022 / 1,056 MiB when ready, 622 / 861 after the warm-up (11.7 s), CPU heap 0.17 GiB. From the PC (`chat
+    say:`): "What is the capital of France?" answered "Paris", and the follow-up "How many people live there?"
+    answered about Paris (4 turns kept, prompt ~122 tokens, reply room 8,038); the TV shows the conversation.
