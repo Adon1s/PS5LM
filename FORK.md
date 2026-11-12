@@ -78,6 +78,11 @@ What is changed, newest last:
     loads in 20 s instead of ~1 min 40 s; largest free block 1,082 MiB when ready (lean.11: 888) and 642 after the
     vision warm-up (434), flat through 25 photos with 0 errors; flexible pool 119 MiB free throughout. With the screen
     on: 710 when ready, 270 after the warm-up. Triangle still wakes the screen while the splash is up.
+  - Text only, the biggest Qwen3.8-27B quant is UD-IQ3_XXS (10.93 GB; the pool takes the file's tensors less the
+    335 MiB MTP block Unsloth's files carry, `blk.64.nextn`, which this llama.cpp does not load). With an 8k context
+    and f16 cache, **screen on**: 496 MiB free when ready, 382 after a 5-minute text load (25 requests of ~1,800
+    prompt tokens, 0 errors, flat from the 10th), 19.3 tokens a second (IQ2_S: 20.1). Screen off (lean.11): 676 and
+    552.
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
