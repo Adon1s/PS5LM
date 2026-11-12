@@ -1362,7 +1362,7 @@ int main(int, char **) {
     // can; the PC's request file "trim" turns it off and on, "memory each" adds
     // a memory line after every request and after its trim.
     bool     trim_on = ps5lm::heap_can_trim(), memory_each = false, warmup_started = false;
-    uint64_t trim_seen = 0;
+    uint64_t trim_seen = 0, warm_in = 0, warm_out = 0;  // warm_*: the vision warm-up's tokens
     int64_t  trim_due = 0, last_trim = last;
     for (uint64_t n = 0;; ++n) {
         const int64_t now = hui::sys::monotonic_us();
@@ -1398,8 +1398,10 @@ int main(int, char **) {
                 }
             }
         }
-        if (std::string warmed; ps5lm::vision_warmup_finished(warmed)) {
-            ps5lm::log_line("%s\n", warmed.c_str());
+        if (std::string warmed; ps5lm::vision_warmup_finished(warmed, &warm_in, &warm_out)) {
+            stats.set_warm_up_tokens(warm_in, warm_out);
+            ps5lm::log_line("%s (%llu tokens in, %llu out)\n", warmed.c_str(), (unsigned long long) warm_in,
+                            (unsigned long long) warm_out);
             log_memory("after the warm-up");
         }
         was_serving = serving;

@@ -294,6 +294,7 @@ void StatsCollector::activity_begin(int id, std::string client, std::string path
     e.asked = std::move(asked);
     e.questions = questions;
     e.started = steady_s();
+    others_begun_ += !is_warm_up(e);
     live_.activity.push_back(std::move(e));
     if (live_.activity.size() > 6) {
         live_.activity.erase(live_.activity.begin());
@@ -332,9 +333,23 @@ void StatsCollector::set_scratch(double gib) {
     live_.scratch_gib = gib;
 }
 
+void StatsCollector::set_warm_up_tokens(uint64_t prompt, uint64_t reply) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    warm_prompt_ = prompt;
+    warm_reply_ = reply;
+    // Its image fills the slot until the next request: until one began after
+    // it, Home's context meter reads empty, not 1,337 tokens.
+    warm_in_slot_ = others_begun_ == 0;
+}
+
 void StatsCollector::set_state(ServerState s) {
     std::lock_guard<std::mutex> lock(mutex_);
     live_.state = s;
+    // A new server counts from 0 (its warm-up, if any, is set again).
+    if (s == ServerState::loading) {
+        warm_prompt_ = warm_reply_ = others_begun_ = 0;
+        warm_in_slot_ = false;
+    }
     // Loading starts from what the pool holds now; progress is measured against
     // what the model and its cache will add.
     load_base_ = s == ServerState::loading ? live_.pool_gib - live_.free_gib : -1;
@@ -475,8 +490,11 @@ void StatsCollector::run() {
                 live_.state = working ? ServerState::generating : ServerState::ready;
                 live_.load_progress = -1;
             }
-            live_.tokens        = (uint64_t) tokens;
-            live_.prompt_tokens = (uint64_t) metric(m, "prompt_tokens_total");
+            // Without the vision warm-up's (PS5LM Lean, lean.22): Home showed
+            // its 1,337 prompt tokens before anyone had asked anything.
+            const uint64_t all_out = (uint64_t) tokens, all_in = (uint64_t) metric(m, "prompt_tokens_total");
+            live_.tokens        = all_out - std::min(all_out, warm_reply_);
+            live_.prompt_tokens = all_in - std::min(all_in, warm_prompt_);
             if (last_working && !working && tokens > last_tokens) {
                 live_.requests++;  // a reply finished
             }
@@ -494,7 +512,9 @@ void StatsCollector::run() {
                 const double dgen = gen_s - last_gen_s;
                 live_.gen_tps = dgen > 0.05 ? (float) ((tokens - last_tokens) / dgen) : 0.0f;
             }
-            live_.ctx_used = (uint32_t) (json_int(slots, "n_prompt_tokens") + json_int(slots, "n_decoded"));
+            live_.ctx_used = warm_in_slot_ && others_begun_ == 0
+                                 ? 0
+                                 : (uint32_t) (json_int(slots, "n_prompt_tokens") + json_int(slots, "n_decoded"));
             // The context the server actually has (PS5LM Lean). Only the
             // planner set it before, so a model loaded from app-args.txt
             // showed "of 0k".

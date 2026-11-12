@@ -18,6 +18,7 @@ namespace {
 
 std::mutex        g_mutex;
 std::string       g_summary;
+uint64_t          g_prompt_tokens = 0, g_reply_tokens = 0;  // the server's usage for it
 std::atomic<bool> g_finished{ false };
 
 // A 24-bit BMP, bottom-up rows: stb_image (llama.cpp's mtmd) reads it, and it
@@ -96,9 +97,17 @@ void run(int port, int width, int height, int n_tokens) {
     char         line[256];
     std::snprintf(line, sizeof(line), "vision warm-up: %dx%d image (%d tokens) %s in %.1f s", width, height,
                   n_tokens, reply.find("\"choices\"") != std::string::npos ? "answered" : "NOT answered", s);
+    // What the server counted for it ("usage"), so Home's totals can leave it out.
+    const auto count = [&](const char * key) -> uint64_t {
+        const std::string k = std::string("\"") + key + "\":";
+        const size_t      at = reply.find(k);
+        return at == std::string::npos ? 0 : std::strtoull(reply.c_str() + at + k.size(), nullptr, 10);
+    };
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_summary = line;
+        g_prompt_tokens = count("prompt_tokens");
+        g_reply_tokens = count("completion_tokens");
     }
     g_finished.store(true, std::memory_order_release);
 }
@@ -138,12 +147,18 @@ bool vision_warmup_start(int port, const std::vector<std::string> & server_args,
     return true;
 }
 
-bool vision_warmup_finished(std::string & summary) {
+bool vision_warmup_finished(std::string & summary, uint64_t * prompt_tokens, uint64_t * reply_tokens) {
     if (!g_finished.exchange(false, std::memory_order_acq_rel)) {
         return false;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
     summary = g_summary;
+    if (prompt_tokens) {
+        *prompt_tokens = g_prompt_tokens;
+    }
+    if (reply_tokens) {
+        *reply_tokens = g_reply_tokens;
+    }
     return true;
 }
 

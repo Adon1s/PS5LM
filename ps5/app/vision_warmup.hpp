@@ -18,6 +18,7 @@
 // the most tokens N allows, no longer than twice its height. Off with "off" on
 // the first line of /data/PS5LM/warmup.txt.
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -27,8 +28,11 @@ namespace ps5lm {
 // warmup.txt does not say off. False when there is nothing to do.
 bool vision_warmup_start(int port, const std::vector<std::string> & server_args, const std::string & warmup_txt);
 
-// Once, when the warm-up has finished: true, with what to log.
-bool vision_warmup_finished(std::string & summary);
+// Once, when the warm-up has finished: true, with what to log, and (lean.22)
+// the prompt and reply tokens the server counted for it, so Home's totals can
+// leave them out (0 when the reply had no usage).
+bool vision_warmup_finished(std::string & summary, uint64_t * prompt_tokens = nullptr,
+                            uint64_t * reply_tokens = nullptr);
 
 // The image's size for a cap of n_tokens, 32 pixels a token side (exposed for a host test).
 void vision_warmup_size(int n_tokens, int & width, int & height);

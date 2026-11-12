@@ -336,9 +336,9 @@ ps5lm::Live sample(float seconds, bool generating) {
         L.activity.push_back(w);
         L.served = 0;  // stats.cpp leaves the warm-up out
         L.requests = 1;
-        L.prompt_tokens = 1337;
-        L.tokens = 1;
-        L.ctx_used = 1337;
+        L.prompt_tokens = 0;  // lean.22: its 1,337 tokens in and 1 out are left out too,
+        L.tokens = 0;         // and the context its image fills
+        L.ctx_used = 0;
         L.uptime_s = 64 + seconds;
         L.energy_wh = 0.31;
         L.gen_history.assign(120, 0.0f);

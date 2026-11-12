@@ -150,6 +150,10 @@ class StatsCollector {
     void set_state(ServerState s);
     void set_scratch(double gib);
     void set_phase(std::string phase);
+    // PS5LM Lean (lean.22): the vision warm-up's tokens, left out of Home's
+    // "tokens in" and "out" (the server's counters include them), and out of
+    // the context meter until another request begins.
+    void set_warm_up_tokens(uint64_t prompt, uint64_t reply);
     // From llama-server's HTTP threads, through activity.cpp.
     void activity_begin(int id, std::string client, std::string path, std::string asked, int questions);
     void activity_text(int id, const std::string & text);
@@ -160,6 +164,9 @@ class StatsCollector {
     std::mutex mutex_;
     Live       live_;
     double     load_base_ = -1;   // pool in use when the load began
+    uint64_t   warm_prompt_ = 0, warm_reply_ = 0;  // set_warm_up_tokens
+    uint64_t   others_begun_ = 0;                  // requests other than the warm-up since the load
+    bool       warm_in_slot_ = false;              // the slot holds only the warm-up's image
     int        port_ = 8081;
 };
 

@@ -16,7 +16,8 @@ namespace ps5lm {
 std::string g_body;
 std::string http_post(int, const char *, const std::string & body, int) {
     g_body = body;
-    return "{\"choices\":[]}";
+    return "{\"choices\":[],\"usage\":{\"completion_tokens\":1,\"prompt_tokens\":1337,\"total_tokens\":1338,"
+           "\"prompt_tokens_details\":{\"cached_tokens\":0}}}";
 }
 }  // namespace ps5lm
 
@@ -79,9 +80,11 @@ int main() {
     const std::vector<std::string> args = { "-m", "x.gguf", "--mmproj", "p.gguf", "--image-max-tokens", "1280" };
     check(ps5lm::vision_warmup_start(8081, args, "/nonexistent/warmup.txt"), "a projector and a cap start it");
     std::string summary;
-    for (int i = 0; i < 200 && !ps5lm::vision_warmup_finished(summary); i++) {
+    uint64_t    warm_in = 0, warm_out = 0;
+    for (int i = 0; i < 200 && !ps5lm::vision_warmup_finished(summary, &warm_in, &warm_out); i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    check(warm_in == 1337 && warm_out == 1, "the server's usage for it, for Home's totals");
     check(summary.find("1280x1024 image (1280 tokens) answered") != std::string::npos, summary.c_str());
     const std::string prefix = "data:image/bmp;base64,";
     const size_t      at = ps5lm::g_body.find(prefix);

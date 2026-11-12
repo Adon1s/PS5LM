@@ -188,8 +188,11 @@ int main(int argc, char ** argv) {
         const ps5lm::Plan gp = ps5lm::plan_model(g, budget, 8192);
         assert(has_args(gp, "-ub", "2048") && has_args(gp, "-b", "2048"));
         assert(std::find(gp.args.begin(), gp.args.end(), "--image-max-tokens") == gp.args.end());
-        // It keeps the vision headroom: base, image encoder, 0.5 for photos.
-        assert(vp.reserve_gib >= 0.8 + 0.25 + 0.5);
+        // It keeps the vision headroom: base, image encoder, 0.3 for photos
+        // (lean.22: 0.5 before lean.20's scheduler fix), and a wide image
+        // encoder keeps 0.5 for its 2048 ubatch.
+        assert(vp.reserve_gib >= 0.35 + 0.25 + 0.3 + vp.state_gib);
+        assert(gp.reserve_gib >= 0.35 + 0.25 + 0.5 + gp.state_gib);
         // The name rule still comes first: a projector named after the model wins.
         write("mmproj-Qwen3.8-27B-Q8_0.gguf", f16, 0);
         assert(ps5lm::read_model_info(at + "/Qwen3.8-27B-UD-IQ2_S.gguf").mmproj == at + "/mmproj-Qwen3.8-27B-Q8_0.gguf");

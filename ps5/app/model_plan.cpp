@@ -497,7 +497,20 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
     // UD-IQ3_XXS text only, 8k f16 cache, -ub 256, no checkpoint: 950 MiB beyond
     // the loaded weights, the cache and the state after a 5-minute text load,
     // which is 0.81 GiB at -ub 64 by the ubatch rule below.
-    p.reserve_gib = 0.8 + p.state_gib + (m.mmproj.empty() ? 0.0 : 0.25) + (wide || causal_vision ? 0.5 : 0.0) + ub_extra;
+    // PS5LM Lean (lean.22): 0.35, not 0.8, and 0.3 of headroom for a causal
+    // vision model, not 0.5. Of the 950 MiB above, 551 were llama.cpp's
+    // scheduler reserving room for one split per graph node; lean.20's patch
+    // 0011 gives them back (with the projector scheduler's 166 MiB, which the
+    // 0.25 for the image encoder held). Measured on the console after the
+    // warm-up (the vision encoder's buffers at their largest; 25 photos after
+    // it take no more), Qwen3.8-27B with its F16 projector, -ub 256, no
+    // checkpoint, beyond the weights, the cache and the state, in largest-free-
+    // block terms: UD-Q2_K_XL 0.84 GiB at 8k with the screen on (lean.21) and
+    // 0.85 at 2k with it off (lean.20), UD-IQ3_XXS 0.85 at 2k with it off. The
+    // reserve below is 0.97 for them (plus the checkpoint's state), and 0.28
+    // + 0.07 for text at -ub 64. Calibrated on Qwen 3.8 27B only.
+    p.reserve_gib = 0.35 + p.state_gib + (m.mmproj.empty() ? 0.0 : 0.25) + (wide ? 0.5 : causal_vision ? 0.3 : 0.0) +
+                    ub_extra;
 
     // Window layers hold the window and one ubatch, padded to 256, whatever
     // the context (llama.cpp's iSWA cache without --swa-full).
