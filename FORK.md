@@ -196,3 +196,21 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     recorded 3 s (16 kHz, 0 failed reads, every read 16.0 ms) to `mic-test-lean18.wav`. Screen on: 712 / 725 MiB when
     ready, 270 / 533 after the warm-up. Standing setting (screen off): 1,084 / 1,096 when ready, 658 / 905 after the
     warm-up, flexible pool 119 MiB free, the same as lean.16.
+- 2026-11-12 (lean.19): speech-to-text on the console (from the mic probe session, `39f7fe5` + `64c8ebd`, Steven's
+  OK).
+  - A request file `stt` transcribes with whisper.cpp on the CPU, beside the running model: a mic-test WAV
+    (`file=speech`, the default) or a new controller take (`rec=N`), with the model
+    `/data/PS5LM/whisper/ggml-<name>.bin` (default `base.en-q5_1`). It logs the text, the times and memory lines.
+    Muted or silent takes are skipped (whisper writes "you" for silence). Files: `ps5/app/stt.cpp`, `stt_audio.cpp`,
+    `stt_audio_test.cpp` (host test, run in CI), `mic_take()` in `mic_probe.cpp`, the hook in `main.cpp`.
+  - New submodule `third_party/whisper.cpp` at v1.9.5 (`d1be6fd`), compiled against llama.cpp's own ggml, so the
+    title holds one ggml. `result.json` records `whisper_revision`.
+  - Memory: `patches/0011-ggml-sched-one-backend-one-split.patch` changes `ggml_backend_sched_new` only for
+    schedulers with one backend (llama's GPU+CPU ones are unchanged), and `patches/whisper/0001` is applied to a copy
+    of whisper's source in `build/`. Without them whisper took about 650 MiB: the PS5 backs every allocated byte.
+  - Measured on the console as 0.11.0-lean.18-stt.2 (`2e3d44d`, the same tree): base.en-q5_1 1.4-1.8 s a take on 4
+    CPU threads (tiny 0.6 s); a live sentence with the screen on came back word for word in 1.7 s for 12 s of audio;
+    +206 MiB of heap while transcribing, 294 MiB still free in one piece with the screen on, all returned after; the
+    model 20.86 tokens a second during a transcription against 20.96 alone; the model still loads with 1,084 MiB free
+    and warms up in 11.6-11.8 s. Write-up: section 11 of `docs/handoffs/RESULT-ps5lm-mic-probe-20261111.md` in the
+    RenoIntel tree.
