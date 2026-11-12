@@ -30,9 +30,10 @@ class ChatEngine {
     ChatView view() const;
 
     // Sends a message, typed or the checked transcript, with the conversation
-    // so far, for a context of `n_ctx` tokens (0: unknown). False, and nothing
+    // so far, for a context of `n_ctx` tokens (0: unknown). `spoken`: some of
+    // it came from the microphone (the Home box says so). False, and nothing
     // sent, while a reply is on its way or when the text is empty.
-    bool send(const std::string & text, uint32_t n_ctx);
+    bool send(const std::string & text, uint32_t n_ctx, bool spoken = false);
     // Forgets the conversation (a reply on its way is no longer shown).
     void new_chat();
 

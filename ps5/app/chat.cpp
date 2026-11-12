@@ -134,7 +134,7 @@ ChatView ChatEngine::view() const {
     return v;
 }
 
-bool ChatEngine::send(const std::string & text, uint32_t n_ctx) {
+bool ChatEngine::send(const std::string & text, uint32_t n_ctx, bool spoken) {
     std::string body;
     uint32_t    seq = 0;
     {
@@ -145,7 +145,7 @@ bool ChatEngine::send(const std::string & text, uint32_t n_ctx) {
         ChatTurn user;
         user.role = ChatTurn::Role::user;
         user.text = text;
-        user.spoken = !s_->transcript.empty() && text == s_->transcript;
+        user.spoken = spoken || (!s_->transcript.empty() && text == s_->transcript);
         s_->turns.push_back(user);
         const size_t first = first_turn_to_send(s_->turns, history_budget(n_ctx, kMaxReply));
         json         messages = json::array();

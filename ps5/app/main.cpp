@@ -1750,7 +1750,7 @@ int main(int, char **) {
                 // a decision model's demo stays a single request.
                 if (!live.decision.empty()) {
                     ask_self(kPort, req.path, true);
-                } else if (!chat.send(req.path, live.ctx)) {
+                } else if (!chat.send(req.path, live.ctx, req.repo == 1)) {  // repo 1: some of it was spoken
                     ps5lm::log_line("chat: message not sent (a reply is on its way, or it was empty)\n");
                 }
                 break;
