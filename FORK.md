@@ -214,3 +214,7 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     model 20.86 tokens a second during a transcription against 20.96 alone; the model still loads with 1,084 MiB free
     and warms up in 11.6-11.8 s. Write-up: section 11 of `docs/handoffs/RESULT-ps5lm-mic-probe-20261111.md` in the
     RenoIntel tree.
+  - Checked on the console as lean.19 (`dd74080`, installed over stt.2): screen on 714 / 725 MiB when ready, 288 /
+    533 after the warm-up (11.6 s); an `stt` of the saved 12 s live take came back word for word in 1,685 ms
+    (whisper loaded in 691 ms, all free 557 -> 338 while transcribing -> 543 after; the largest block stayed 288).
+    Standing setting (screen off): 1,084 / 1,096 when ready, 664 / 905 after the warm-up, flexible 119 MiB free.
