@@ -218,3 +218,24 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     533 after the warm-up (11.6 s); an `stt` of the saved 12 s live take came back word for word in 1,685 ms
     (whisper loaded in 691 ms, all free 557 -> 338 while transcribing -> 543 after; the largest block stayed 288).
     Standing setting (screen off): 1,084 / 1,096 when ready, 664 / 905 after the warm-up, flexible 119 MiB free.
+- 2026-11-12 (lean.20): about 710 MiB more for the model (from the scheduler-memory session, `09f3436`, Steven's OK).
+  - `patches/0011-ggml-sched-grows-with-the-graph.patch` replaces lean.19's `0011-ggml-sched-one-backend-one-split`.
+    `ggml_backend_sched_new` reserved room for one split per graph node (20,160 bytes a node plus id arrays): 551 MiB
+    for the model's scheduler (27,232 nodes at `-ub 256`) and 166 MiB for the projector's, of which the graphs use
+    7 KB and 1.5 KB (2 splits and 10 inputs; 1 split and 2 inputs). Now the split copies go into small contexts that
+    grow on demand, and the id arrays grow with the graph copy. Whisper's one-backend schedulers are covered too
+    (base.en 158 -> 151 MiB after loading, the same text).
+  - Checked on the PC: the same answers and top-3 log-probabilities to the last digit as the unpatched build, with
+    2 splits, with 322 splits and 410 inputs a graph, and with a first context of one tensor.
+  - Measured on the console as 0.11.0-lean.19-sched.1 (the same tree; Q2_K_XL v10, MiB largest / all free):
+    - Screen off: **1,792 / 1,819 when ready** (lean.19: 1,084 / 1,096), 1,382 / 1,620 after the warm-up (664 /
+      905), flat at 1,382 through 25 photos (lean.13: 646 -> 620). CPU heap when ready 152 MiB (lean.19: 874).
+    - Screen on: 1,422 / 1,448 when ready (lean.13: 712 / 723), 980 / 1,241 after the warm-up (304 / 533), flat at
+      980 through 25 photos.
+    - 0 errors, median 12.0-12.1 s a photo, warm-up 11.6-11.7 s; answers within run-to-run variation (wear 24/25
+      against lean.13; lean.11 against lean.13 was 23/25).
+    - **IQ3_XXS with vision, screen off, now fits**: 740 when ready, 310 after the warm-up, flat through 25 photos,
+      0 errors, median 12.1 s.
+  - The planner (Models page) still assumes the old heap, so it now under-promises by about 700 MiB (for example
+    "images need 11.9 GiB" for Q2_K_XL). Write-up: `docs/handoffs/RESULT-ps5lm-sched-memory-20261112.md` in the
+    RenoIntel tree.
