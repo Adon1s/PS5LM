@@ -1,0 +1,37 @@
+PS5LM: a ggml scheduler with one backend reserves room for one split, not one per node.
+
+On the PS5 every byte a title allocates is real memory. ggml_backend_sched_new reserves a context
+buffer for the worst case of one split per graph node, each with 30 inputs copied: ~83 MB at 4,096
+nodes. whisper.cpp makes four CPU-only schedulers, ~330 MB never used. With one backend a graph is
+never split and no input is copied. Schedulers with two or more backends (llama.cpp on the GPU) are
+unchanged.
+
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -1978,8 +1978,13 @@
+     sched->hv_tensor_backend_ids = (int *) malloc(sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
+     sched->hv_tensor_copies      = (ggml_tensor **) malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+ 
+-    const size_t ggml_sched_max_splits = graph_size; // at most there is one split for each node in the graph
+-    const size_t nodes_size = graph_size + ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2;
++    // PS5LM: with one backend a graph is never split and no input is copied, so one split is room enough,
++    // with the graph size again for the dependency nodes a backend's graph_optimize may add. Every byte a
++    // title allocates on the PS5 is real memory: the worst case of one split per node took ~83 MB a
++    // scheduler at 4,096 nodes, and whisper.cpp makes four CPU-only schedulers. Two or more backends: as before.
++    const size_t ggml_sched_max_splits = n_backends > 1 ? graph_size : 1; // at most there is one split for each node in the graph
++    const size_t ggml_sched_max_deps = n_backends > 1 ? 0 : graph_size;
++    const size_t nodes_size = graph_size + ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2 + ggml_sched_max_deps;
+     sched->node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->node_backend_ids[0]));
+     sched->leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->leaf_backend_ids[0]));
+     sched->prev_node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_node_backend_ids[0]));
+@@ -1988,7 +1993,9 @@
+     sched->graph_size      = 0;
+     sched->prev_graph_size = 0;
+ 
+-    sched->context_buffer_size = ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
++    sched->context_buffer_size = n_backends > 1
++        ? ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false)
++        : (ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2 + ggml_sched_max_deps)*ggml_tensor_overhead() + ggml_graph_overhead_custom(graph_size, false);
+     sched->context_buffer = (char *) malloc(sched->context_buffer_size);
+ 
+     const int initial_splits_capacity = 16;

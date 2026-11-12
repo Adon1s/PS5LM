@@ -154,13 +154,22 @@ cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/heap_info.cpp" -o
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/vision_warmup.cpp" -o "$obj/vision_warmup.o"
 # PS5LM Lean: speech-to-text. whisper.cpp's own source, compiled against the ggml
 # llama.cpp brings (whisper's copy of ggml is the same library, one minor
-# version older): the title holds one ggml. CPU only (ps5/app/stt.cpp).
+# version older): the title holds one ggml. CPU only (ps5/app/stt.cpp). The
+# source is copied out of the pinned submodule and patches/whisper applied to
+# the copy, so the submodule stays as pinned.
 whisper_version=$(sed -n 's/^set(WHISPER_VERSION_\(MAJOR\|MINOR\|PATCH\) \([0-9]*\))$/\2/p' "$whisper/CMakeLists.txt" | paste -sd.)
-whisper_flags=(-fexceptions -fcxx-exceptions -frtti -w -I "$whisper/include" -I "$whisper/src" -I "$llama/ggml/include"
+wsrc="$out/whisper-src"
+rm -rf -- "$wsrc"
+mkdir -p "$wsrc"
+cp -r "$whisper/src" "$whisper/include" "$wsrc/"
+for p in "$root"/patches/whisper/*.patch; do
+    patch -s -p1 --fuzz=0 --no-backup-if-mismatch -d "$wsrc" -i "$p"
+done
+whisper_flags=(-fexceptions -fcxx-exceptions -frtti -w -I "$wsrc/include" -I "$wsrc/src" -I "$llama/ggml/include"
     -DWHISPER_VERSION="\"$whisper_version\"")
-cxx -std=c++17 "${whisper_flags[@]}" -c "$whisper/src/whisper.cpp" -o "$obj/whisper.o"
-cxx -std=c++17 "${whisper_flags[@]}" -c "$whisper/src/aneforge/whisper-aneforge.cpp" -o "$obj/whisper_aneforge.o"
-cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$whisper/include" -I "$llama/ggml/include" -c "$root/ps5/app/stt.cpp" -o "$obj/stt.o"
+cxx -std=c++17 "${whisper_flags[@]}" -c "$wsrc/src/whisper.cpp" -o "$obj/whisper.o"
+cxx -std=c++17 "${whisper_flags[@]}" -c "$wsrc/src/aneforge/whisper-aneforge.cpp" -o "$obj/whisper_aneforge.o"
+cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$wsrc/include" -I "$llama/ggml/include" -c "$root/ps5/app/stt.cpp" -o "$obj/stt.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/stt_audio.cpp" -o "$obj/stt_audio.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$llama/vendor" -I "$root/ps5/app" -I "$root/third_party/ps5-homebrew-ui/src" -c "$root/ps5/app/activity.cpp" -o "$obj/activity.o"
 "$root/ps5/app/ps5cc" -O2 -I "$llama/vendor/hash" -c "$llama/vendor/hash/sha256/sha256.c" -o "$obj/sha256.o"

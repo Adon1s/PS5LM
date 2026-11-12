@@ -164,6 +164,7 @@ import sys
 
 output, app = map(Path, sys.argv[1:3])
 sdk_patches = sorted((Path(sys.argv[9]) / 'patches/sdk').glob('*.patch'))
+whisper_patches = sorted((Path(sys.argv[9]) / 'patches/whisper').glob('*.patch'))
 files = ('eboot.bin', 'payloads/ps5lm-ftpsrv.elf', 'sce_module/libc.prx', 'sce_sys/param.json', 'sce_sys/icon0.png', 'sce_sys/pic0.dds', 'sce_sys/pic1.dds')
 result = {
     'status': 'passed',
@@ -173,6 +174,8 @@ result = {
     'ui_revision': sys.argv[5],
     'llama_revision': sys.argv[6],
     'whisper_revision': sys.argv[10],
+    # PS5LM Lean: whisper.cpp's source is compiled from a copy with these applied.
+    'whisper_patches_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in whisper_patches},
     'ps5_vulkan_revision': sys.argv[7],
     'ps5_payload_sdk_revision': sys.argv[8],
     # PS5LM Lean: the title heap is the pinned SDK's with these applied.

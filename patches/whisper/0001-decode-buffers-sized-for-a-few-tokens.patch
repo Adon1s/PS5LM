@@ -1,0 +1,41 @@
+PS5LM: whisper sizes its decoder for a few tokens at first, not the whole text context.
+
+whisper_init_state reserves the logits vector and the decoder compute buffer for n_text_ctx (448)
+tokens at once: ~93 MB each, real memory on the PS5. With no previous text as prompt a decode is at
+most a few tokens (the start-of-transcript tokens, one per beam). A longer prompt still works: the
+vector grows, and ggml grows a single CPU compute buffer when a graph needs more.
+
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -151,6 +151,8 @@
+ static constexpr float WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF = 0.5f;
+ 
+ #define WHISPER_MAX_NODES 4096
++// PS5LM: tokens the decoder's buffers are first sized for (prompt + beams); they grow past it on demand
++#define WHISPER_PS5LM_DECODE_RESERVE 32
+ 
+ static std::string format(const char * fmt, ...) {
+     va_list ap;
+@@ -3562,7 +3564,9 @@
+         WHISPER_LOG_INFO("%s: ANEForge encoder loaded\n", __func__);
+     }
+ 
+-    state->logits.reserve(ctx->vocab.n_vocab * ctx->model.hparams.n_text_ctx);
++    // PS5LM: logits for a few tokens at a time (the start-of-transcript prompt, one token per beam); a longer
++    // prompt grows the vector when it comes. Reserving the whole text context took 93 MB, real memory on the PS5.
++    state->logits.reserve(ctx->vocab.n_vocab * std::min(ctx->model.hparams.n_text_ctx, WHISPER_PS5LM_DECODE_RESERVE));
+ 
+     state->batch = whisper_batch_init(ctx->model.hparams.n_text_ctx, WHISPER_MAX_DECODERS);
+ 
+@@ -3630,8 +3634,9 @@
+                 [&]() {
+                     const auto & hparams = ctx->model.hparams;
+ 
+-                    // TODO: make sure this is the worst-case scenario
+-                    const int n_tokens = hparams.n_text_ctx;
++                    // PS5LM: sized for a few tokens at a time, as the logits above. A longer prompt makes ggml's
++                    // allocator grow the CPU compute buffer when it comes; the whole text context took ~93 MB.
++                    const int n_tokens = std::min(hparams.n_text_ctx, WHISPER_PS5LM_DECODE_RESERVE);
+                     const int n_past   = 0;
+ 
+                     whisper_batch_prep_legacy(state->batch, nullptr, n_tokens, n_past, 0);
