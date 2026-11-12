@@ -145,6 +145,18 @@ class Dashboard {
     void draw_home(hui::gfx::DrawList & list) const;
     void draw_requests(hui::gfx::DrawList & list, const hui::gfx::Rect & panel) const;
     void draw_feed(hui::gfx::DrawList & list, float x, float w, float top, float bottom) const;
+    // PS5LM Lean, the Home chat: the conversation, the message box under it,
+    // the line over the box that says why nothing was transcribed or sent,
+    // and the talk button, the box's buttons and the scroll.
+    void draw_chat(hui::gfx::DrawList & list, const hui::gfx::Rect & view) const;
+    void draw_box(hui::gfx::DrawList & list) const;
+    void draw_chat_note(hui::gfx::DrawList & list, float x, float w, float y) const;
+    hui::gfx::Rect chat_box() const;   // the message box, as tall as its text
+    hui::gfx::Rect chat_view() const;  // where the conversation shows, over the box
+    float chat_height(float w) const;  // the whole conversation laid out, for the scroll's end
+    void update_chat(const hui::InputFrame & input, float dt, hui::ui::Feedback & feedback);
+    void send_box(hui::ui::Feedback & feedback);
+    void say(std::string head, std::string detail, bool fault = false, float seconds = 5);
     void draw_models(hui::gfx::DrawList & list) const;
     void draw_local(hui::gfx::DrawList & list, const hui::gfx::Rect & area) const;
     void draw_suggested(hui::gfx::DrawList & list, const hui::gfx::Rect & area) const;
@@ -178,6 +190,21 @@ class Dashboard {
     ScreenInfo  screen_;
     Request     request_;
     ChatView    chat_;  // PS5LM Lean: set_chat
+    // PS5LM Lean, the Home chat's own state.
+    std::string box_;                    // the message box: a transcript or typed text, until it is sent
+    bool        box_spoken_ = false;     // ... some of it came from the microphone
+    uint32_t    taken_seq_ = 0;          // the last transcript the box took
+    bool        talking_ = false;        // the talk button is down and talk_start was asked
+    bool        send_waits_ = false;     // R2 while a reply comes: sent when it ends
+    float       chat_scroll_ = 0;        // pixels up from the newest message
+    float       new_chat_armed_ = 0;     // seconds left for a second Square to start a new chat
+    bool        devices_ = false;        // the panel shows the other devices' requests, not the chat
+    MicState    mic_seen_ = MicState::off;  // the microphone's state last frame
+    float       level_clock_ = 0;        // since the meter last took a level
+    std::vector<float> levels_;          // the take's levels, newest last, for the meter
+    std::string note_head_, note_detail_;  // the line over the box
+    bool        note_fault_ = false;
+    float       note_left_ = 0;          // seconds it stays
     ScreenAsk   screen_ask_ = ScreenAsk::none;  // the question is open
     std::string screen_model_;                  // ... for this model (ScreenAsk::load)
     float       countdown_ = -1;                // seconds left before the screen goes off, or < 0
