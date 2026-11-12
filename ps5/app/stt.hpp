@@ -7,6 +7,9 @@
 
 #include <functional>
 #include <string>
+#include <vector>
+
+struct whisper_context;
 
 namespace ps5lm {
 
@@ -31,5 +34,32 @@ void start_stt(std::string spec, MemoryLine memory);
 
 // The same on the calling thread (start_stt's thread, and the PC check).
 void run_stt(const std::string & spec, const MemoryLine & memory);
+
+// One whisper.cpp model kept loaded, for push-to-talk (chat.cpp): load once,
+// transcribe each take, unload when the chat is not in use. CPU only; English.
+// Not thread-safe: one caller at a time.
+class Whisper {
+  public:
+    Whisper() = default;
+    ~Whisper();
+    Whisper(const Whisper &) = delete;
+    Whisper & operator=(const Whisper &) = delete;
+
+    bool   load(const std::string & path, std::string & error);  // true when loaded (or already)
+    void   unload();
+    bool   loaded() const { return ctx_ != nullptr; }
+    double load_ms() const { return load_ms_; }
+    // 16 kHz mono floats (stt_audio.hpp's to_whisper_input). `beam` 1 = greedy.
+    bool transcribe(const std::vector<float> & pcm, int threads, int beam, std::string & text, double & ms,
+                    std::string & error);
+
+  private:
+    struct whisper_context * ctx_ = nullptr;
+    std::string              path_;
+    double                   load_ms_ = 0;
+};
+
+// /data/PS5LM/whisper/ggml-<name>.bin
+std::string whisper_model_path(const std::string & name);
 
 }  // namespace ps5lm

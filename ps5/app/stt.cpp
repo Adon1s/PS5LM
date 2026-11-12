@@ -208,6 +208,80 @@ void transcribe(const Spec & spec, const std::vector<float> & pcm, double audio_
 
 }  // namespace
 
+// ---- Whisper: one model kept loaded (stt.hpp) ----
+
+Whisper::~Whisper() {
+    unload();
+}
+
+bool Whisper::load(const std::string & path, std::string & error) {
+    if (ctx_) {
+        return true;
+    }
+    struct stat st = {};
+    if (stat(path.c_str(), &st) != 0) {
+        error = "no whisper model at " + path;
+        return false;
+    }
+    const auto t0 = Clock::now();
+    {
+        GgmlLogGuard           keep;
+        whisper_context_params cparams = whisper_context_default_params();
+        cparams.use_gpu = false;  // the GPU is the language model's
+        ctx_ = whisper_init_from_file_with_params(path.c_str(), cparams);
+    }
+    load_ms_ = ms_since(t0);
+    if (!ctx_) {
+        error = "whisper could not load " + path;
+        return false;
+    }
+    path_ = path;
+    return true;
+}
+
+void Whisper::unload() {
+    if (ctx_) {
+        GgmlLogGuard keep;
+        whisper_free(ctx_);
+        ctx_ = nullptr;
+    }
+}
+
+bool Whisper::transcribe(const std::vector<float> & pcm, int threads, int beam, std::string & text, double & ms,
+                         std::string & error) {
+    if (!ctx_) {
+        error = "no whisper model loaded";
+        return false;
+    }
+    whisper_full_params p =
+        whisper_full_default_params(beam > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+    if (beam > 1) {
+        p.beam_search.beam_size = beam;
+    }
+    p.n_threads = threads;
+    p.language = "en";
+    p.translate = false;
+    p.no_context = true;
+    p.print_progress = false;
+    p.print_realtime = false;
+    p.print_timestamps = false;
+    p.print_special = false;
+    GgmlLogGuard keep;
+    const auto   t0 = Clock::now();
+    const int    rc = whisper_full(ctx_, p, pcm.data(), (int) pcm.size());
+    ms = ms_since(t0);
+    if (rc != 0) {
+        error = "whisper_full = " + std::to_string(rc);
+        return false;
+    }
+    text = segments_text(ctx_);
+    return true;
+}
+
+std::string whisper_model_path(const std::string & name) {
+    return data_path("whisper/ggml-" + name + ".bin");
+}
+
 void run_stt(const std::string & spec_text, const MemoryLine & memory) {
     if (g_stt_busy.exchange(true)) {
         log_line("stt: a transcription is already running; request '%s' dropped\n", spec_text.c_str());

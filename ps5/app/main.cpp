@@ -45,6 +45,7 @@
 
 #include <GL/glcorearb.h>
 
+#include "chat.hpp"
 #include "dashboard.hpp"
 #include "log.hpp"
 #include "log_sink.hpp"
@@ -1174,6 +1175,10 @@ int main(int, char **) {
     StatsCollector stats;
     stats.start(kPort);
     set_activity_sink(&stats);  // llama-server's request hooks (patches/0007) report here
+    // PS5LM Lean: the Home chat: its conversation, sent as messages, and push-to-talk.
+    // It lives as long as the process (its threads hold its state).
+    static ps5lm::ChatEngine chat(kPort, [](const char * when) { log_memory(when, false); });
+    ps5lm::set_chat_sink(&chat);
     Models models;
     models.settings = load_settings(g_files.settings.c_str());
     models.screen_gib = screen_up ? screen_cost_gib : 0;  // PS5LM Lean: which models fit with it off
@@ -1437,6 +1442,7 @@ int main(int, char **) {
         }
         dash.set_live(live);
         dash.set_screen({ screen_cost_gib, screen_cost_measured, models.budget_gib });
+        dash.set_chat(chat.view());  // PS5LM Lean: the Home chat
         feedback.clear();
         // A button pressed from the PC (scripts/ps5lm-app.sh press r1), for
         // testing the screens without a controller in hand.
@@ -1739,7 +1745,20 @@ int main(int, char **) {
             }
         }
         switch (req.kind) {
-            case Dashboard::Request::ask: ask_self(kPort, req.path, !live.decision.empty()); break;
+            case Dashboard::Request::ask:
+                // PS5LM Lean: a chat message goes with the conversation so far (chat.cpp);
+                // a decision model's demo stays a single request.
+                if (!live.decision.empty()) {
+                    ask_self(kPort, req.path, true);
+                } else if (!chat.send(req.path, live.ctx)) {
+                    ps5lm::log_line("chat: message not sent (a reply is on its way, or it was empty)
+");
+                }
+                break;
+            case Dashboard::Request::talk_start: chat.talk_start(); break;
+            case Dashboard::Request::talk_stop: chat.talk_stop(); break;
+            case Dashboard::Request::talk_cancel: chat.talk_cancel(); break;
+            case Dashboard::Request::chat_new: chat.new_chat(); break;
             case Dashboard::Request::market_search: market.search(req.path); break;
             case Dashboard::Request::market_open: market.open_repo(req.repo); break;
             case Dashboard::Request::market_plan: market.plan_file(req.repo, req.file); break;
@@ -1913,6 +1932,7 @@ int main(int, char **) {
         }
         if (n % 60 == 0) {
             quit_if_asked();
+            chat.tick(screen_up);  // PS5LM Lean: push-to-talk needs the screen; whisper unloads when idle
         }
     }
 }

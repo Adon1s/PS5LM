@@ -171,6 +171,9 @@ cxx -std=c++17 "${whisper_flags[@]}" -c "$wsrc/src/whisper.cpp" -o "$obj/whisper
 cxx -std=c++17 "${whisper_flags[@]}" -c "$wsrc/src/aneforge/whisper-aneforge.cpp" -o "$obj/whisper_aneforge.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$wsrc/include" -I "$llama/ggml/include" -c "$root/ps5/app/stt.cpp" -o "$obj/stt.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/stt_audio.cpp" -o "$obj/stt_audio.o"
+# PS5LM Lean: the Home chat's engine (history sent as messages, push-to-talk).
+cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$llama/vendor" -c "$root/ps5/app/chat.cpp" -o "$obj/chat.o"
+cxx -std=c++20 -fexceptions -fcxx-exceptions -c "$root/ps5/app/chat_history.cpp" -o "$obj/chat_history.o"
 cxx -std=c++20 -fexceptions -fcxx-exceptions -I "$llama/vendor" -I "$root/ps5/app" -I "$root/third_party/ps5-homebrew-ui/src" -c "$root/ps5/app/activity.cpp" -o "$obj/activity.o"
 "$root/ps5/app/ps5cc" -O2 -I "$llama/vendor/hash" -c "$llama/vendor/hash/sha256/sha256.c" -o "$obj/sha256.o"
 "$root/ps5/app/ps5cc" -O2 -c "$root/ps5/app/compat_app.c" -o "$obj/compat_app.o"
@@ -284,7 +287,7 @@ mapfile -t libs < <(find "$out/llama" -name '*.a' | sort)
 "$sdk/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
     --version-script "$vk/tooling/native/app-symbols.map" --exclude-libs=ALL "${heap_link[@]}" \
     -e _start -o "$out/llvm-pie.elf" \
-    "$obj/app_crt.o" "$obj/app_cpp_runtime.o" "$obj/main.o" "$obj/display.o" "$obj/model_plan.o" "$obj/fleet_worker.o" "$obj/settings.o" "$obj/report.o" "$obj/storage.o" "$obj/log_sink.o" "$obj/probes.o" "$obj/mic_probe.o" "$obj/stt.o" "$obj/stt_audio.o" "$obj/whisper.o" "$obj/whisper_aneforge.o" "$obj/fetch.o" "$obj/market.o" "$obj/ftp_writer.o" "$obj/heap_info.o" "$obj/vision_warmup.o" "$obj/activity.o" "$obj/sha256.o" "$obj/dashboard.o" "$obj/stats.o" \
+    "$obj/app_crt.o" "$obj/app_cpp_runtime.o" "$obj/main.o" "$obj/display.o" "$obj/model_plan.o" "$obj/fleet_worker.o" "$obj/settings.o" "$obj/report.o" "$obj/storage.o" "$obj/log_sink.o" "$obj/probes.o" "$obj/mic_probe.o" "$obj/stt.o" "$obj/stt_audio.o" "$obj/chat.o" "$obj/chat_history.o" "$obj/whisper.o" "$obj/whisper_aneforge.o" "$obj/fetch.o" "$obj/market.o" "$obj/ftp_writer.o" "$obj/heap_info.o" "$obj/vision_warmup.o" "$obj/activity.o" "$obj/sha256.o" "$obj/dashboard.o" "$obj/stats.o" \
     --start-group "${libs[@]}" "$obj/libps5lm_kit.a" "$obj/libps5app_compat.a" "${heap_lib[@]}" "$out/gl/libps5lm_gl.a" --end-group \
     "$out/stubs/libSceAgc.so" "$out/stubs/libSceAgcDriver.so" "$out/stubs/libSceAudioIn.so" \
     "${radv_link_inputs[@]}" \

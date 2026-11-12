@@ -5,7 +5,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -51,5 +53,10 @@ struct MicTake {
     std::string          error;
 };
 bool mic_take(int seconds, MicTake & take);
+// The same, open-ended for push-to-talk: records until `stop` is set or
+// `max_seconds` pass; `progress` gets the level of the last ~100 ms (0..1) and
+// the seconds so far, about ten times a second (on the recording thread).
+bool mic_record(const std::atomic<bool> & stop, int max_seconds, MicTake & take,
+                const std::function<void(float level, double seconds)> & progress);
 
 }  // namespace ps5lm
