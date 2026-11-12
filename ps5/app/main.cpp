@@ -1751,8 +1751,7 @@ int main(int, char **) {
                 if (!live.decision.empty()) {
                     ask_self(kPort, req.path, true);
                 } else if (!chat.send(req.path, live.ctx)) {
-                    ps5lm::log_line("chat: message not sent (a reply is on its way, or it was empty)
-");
+                    ps5lm::log_line("chat: message not sent (a reply is on its way, or it was empty)\n");
                 }
                 break;
             case Dashboard::Request::talk_start: chat.talk_start(); break;
