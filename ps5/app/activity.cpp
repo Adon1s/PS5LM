@@ -5,6 +5,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "stats.hpp"
+#include "chat.hpp"
 #include "heap_info.hpp"
 
 #include <nlohmann/json.hpp>
@@ -23,6 +24,7 @@ namespace {
 std::mutex                    g_mutex;
 std::map<int, std::string>    g_partial;  // an answer's stream, up to its last full line
 std::map<int, bool>           g_ignored;  // requests whose answer must not be accumulated
+std::map<int, uint32_t>       g_chat;     // PS5LM Lean: the Home chat's requests (chat.cpp), by their sequence number
 ps5lm::StatsCollector *       g_sink = nullptr;
 
 // One line, spaces collapsed, at most `cap` bytes, cut at a character's start.
@@ -237,6 +239,12 @@ void ps5lm_activity_begin(int id, const char * method, const char * path, const 
         return;
     }
     const json j = json::parse(body, body + body_len, nullptr, false);
+    // PS5LM Lean: the Home chat's own requests carry "user": "ps5lm-chat-<n>"; their answer goes back to it.
+    if (uint32_t seq = 0; j.is_object() && j.contains("user") && j["user"].is_string() &&
+                          ps5lm::chat_seq_of(j["user"].get<std::string>(), seq)) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_chat[id] = seq;
+    }
     const int questions = j.is_object() && j.contains("questions") && j["questions"].is_object() ? (int) j["questions"].size() : 0;
     g_sink->activity_begin(id, remote ? remote : "", path ? path : "", one_line(printable(asked_from(path ? path : "", j)), 400), questions);
 }
@@ -282,6 +290,15 @@ void ps5lm_activity_data(int id, const char * data, size_t len) {
     out = printable(out);
     if (!out.empty()) {
         g_sink->activity_text(id, out);
+        uint32_t seq = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            const auto it = g_chat.find(id);
+            seq = it == g_chat.end() ? 0 : it->second;
+        }
+        if (seq != 0 && ps5lm::chat_sink()) {
+            ps5lm::chat_sink()->on_text(seq, out);
+        }
     }
 }
 
@@ -289,15 +306,23 @@ void ps5lm_activity_end(int id, int status) {
     // PS5LM Lean: the main loop trims the heap 0.25 s after this, once the
     // request's response and the slot's buffers are freed (heap_info.hpp).
     ps5lm::heap_request_ended();
+    uint32_t chat_seq = 0;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_partial.erase(id);
+        if (const auto it = g_chat.find(id); it != g_chat.end()) {
+            chat_seq = it->second;
+            g_chat.erase(it);
+        }
         if (g_ignored.erase(id) != 0) {
             return;
         }
     }
     if (g_sink) {
         g_sink->activity_end(id, status);
+    }
+    if (chat_seq != 0 && ps5lm::chat_sink()) {
+        ps5lm::chat_sink()->on_end(chat_seq, status);
     }
 }
 

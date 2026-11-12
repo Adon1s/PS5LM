@@ -30,7 +30,9 @@
 #include "log.hpp"
 #include "storage.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <functional>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -499,10 +501,14 @@ void probe_mic(std::string spec_text) {
     g_mic_busy = false;
 }
 
-// One take for speech-to-text (stt.cpp): the general port at 16 kHz mono, as
-// the probe measured it, without its logging. The silent state is read at the
-// start and at the end, so a mute pressed during the take is seen.
-bool mic_take(int seconds, MicTake & take) {
+// One take for speech-to-text (stt.cpp, chat.cpp): the general port at 16 kHz
+// mono, as the probe measured it, without its logging. Records until `stop` is
+// set or `max_seconds` pass; `progress` (optional) gets the level of the last
+// ~100 ms (0..1) and the seconds so far, about ten times a second. The silent
+// state is read at the start and at the end, so a mute pressed during the take
+// is seen.
+bool mic_record(const std::atomic<bool> & stop, int max_seconds, MicTake & take,
+                const std::function<void(float level, double seconds)> & progress) {
     take = MicTake{};
     if (g_mic_busy.exchange(true)) {
         take.error = "a recording is already running";
@@ -538,12 +544,12 @@ bool mic_take(int seconds, MicTake & take) {
     take.rate = p.freq;
     const int start_state = c.silent ? c.silent(handle) : 0;
     take.silent_state = start_state > 0 ? start_state : 0;
-    const uint64_t       want = (uint64_t) seconds * p.freq;
+    const uint64_t       want = (uint64_t) (max_seconds > 0 ? max_seconds : 1) * p.freq;
     std::vector<int16_t> buf(p.len);
-    take.samples.reserve(want);
-    int        run = 0;
+    take.samples.reserve(std::min<uint64_t>(want, (uint64_t) 10 * p.freq));
+    int        run = 0, peak = 0, reads = 0;
     const auto t0 = Clock::now();
-    while (take.samples.size() < want) {
+    while (take.samples.size() < want && !stop.load()) {
         const int got = c.input(handle, buf.data());
         if (got < 0) {
             ++take.failed_reads;
@@ -557,12 +563,27 @@ bool mic_take(int seconds, MicTake & take) {
         }
         run = 0;
         take.samples.insert(take.samples.end(), buf.begin(), buf.end());
+        for (const int16_t v : buf) {
+            const int a = v < 0 ? -(int) v : (int) v;
+            peak = a > peak ? a : peak;
+        }
+        if (++reads % 6 == 0) {  // ~100 ms
+            if (progress) {
+                progress(std::min(1.0f, peak / 32767.0f), (double) take.samples.size() / p.freq);
+            }
+            peak = 0;
+        }
     }
     take.seconds_taken = std::chrono::duration<double>(Clock::now() - t0).count();
     const int end_state = c.silent ? c.silent(handle) : 0;
     take.silent_state |= end_state > 0 ? end_state : 0;
     c.close(handle);
     return take.error.empty();
+}
+
+bool mic_take(int seconds, MicTake & take) {
+    const std::atomic<bool> never{ false };
+    return mic_record(never, seconds, take, {});
 }
 
 }  // namespace ps5lm
@@ -576,6 +597,12 @@ void probe_mic(std::string spec_text) {
 }
 
 bool mic_take(int, MicTake & take) {
+    take = MicTake{};
+    take.error = "no microphone off the console";
+    return false;
+}
+
+bool mic_record(const std::atomic<bool> &, int, MicTake & take, const std::function<void(float, double)> &) {
     take = MicTake{};
     take.error = "no microphone off the console";
     return false;

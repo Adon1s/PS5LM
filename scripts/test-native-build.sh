@@ -25,6 +25,9 @@ clang++ -std=c++17 -O1 ps5/app/ftp_writer_test.cpp ps5/app/ftp_writer.cpp -o "$o
 # PS5LM Lean: the WAV reader and silence gate speech-to-text uses (ps5/app/stt_audio.cpp).
 clang++ -std=c++17 -O1 ps5/app/stt_audio_test.cpp ps5/app/stt_audio.cpp -o "$output/tools/stt_audio_test"
 "$output/tools/stt_audio_test"
+# PS5LM Lean: which chat turns fit the context (ps5/app/chat_history.cpp).
+clang++ -std=c++17 -O1 ps5/app/chat_history_test.cpp ps5/app/chat_history.cpp -o "$output/tools/chat_history_test"
+"$output/tools/chat_history_test"
 ui="$root/third_party/ps5-homebrew-ui"
 ui_revision=$(git ls-tree HEAD third_party/ps5-homebrew-ui | awk '{print $3}')
 [[ -f "$ui/tools/fetch-opengl-sdk.sh" && $(git -C "$ui" rev-parse HEAD) == "$ui_revision" ]] || {

@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "chat_view.hpp"
 #include "market.hpp"
 #include "settings.hpp"
 #include "stats.hpp"
@@ -75,6 +76,9 @@ class Dashboard {
     void set_logs(std::vector<std::string> app, std::vector<std::string> llama);
     bool wants_logs() const;  // the logs are on screen: keep them fresh
     void set_market(MarketView view) { market_ = std::move(view); }
+    // PS5LM Lean: the Home chat's conversation and push-to-talk microphone
+    // (chat_view.hpp), from the chat engine each frame.
+    void set_chat(ChatView view) { chat_ = std::move(view); }
     // Where the app keeps its files: full storage (/data), or its own, of
     // `app_gib`. `ask`: full storage is closed and no choice was made yet, so
     // the question comes up over whatever page is open.
@@ -106,7 +110,12 @@ class Dashboard {
                     // the screen's memory loaded without it (path). screen_off_now is the
                     // PC's test request (in place, not remembered); screen_sleep the
                     // sleep timer's (in place, not remembered, any button wakes it).
-                    screen_off, screen_off_restart, load_screen_off, screen_off_now, screen_sleep } kind = none;
+                    screen_off, screen_off_restart, load_screen_off, screen_off_now, screen_sleep,
+                    // PS5LM Lean, the Home chat: the talk button went down (start
+                    // recording), came up (stop and transcribe), or the take was
+                    // abandoned (stop, transcribe nothing); start a new chat (forget
+                    // the conversation). Sending, typed or spoken, stays `ask`.
+                    talk_start, talk_stop, talk_cancel, chat_new } kind = none;
         std::string path;   // a model, a market query, the folder a download goes to (empty: the setting), or what to ask
         int repo = -1, file = -1;  // a market file, a download's index (repo), or a suggestion's (repo)
     };
@@ -168,6 +177,7 @@ class Dashboard {
     Live        live_;
     ScreenInfo  screen_;
     Request     request_;
+    ChatView    chat_;  // PS5LM Lean: set_chat
     ScreenAsk   screen_ask_ = ScreenAsk::none;  // the question is open
     std::string screen_model_;                  // ... for this model (ScreenAsk::load)
     float       countdown_ = -1;                // seconds left before the screen goes off, or < 0

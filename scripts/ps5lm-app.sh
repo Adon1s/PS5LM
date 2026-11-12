@@ -22,6 +22,8 @@
 #   scripts/ps5lm-app.sh stt [spec]          PS5LM Lean: transcribe a mic-test WAV or a new take with whisper.cpp on the
 #                                            CPU (model in /data/PS5LM/whisper), text, times and memory in app.log
 #                                            (spec: ps5/app/stt.hpp)
+#   scripts/ps5lm-app.sh chat [what]         PS5LM Lean: the Home chat from the PC, for tests: new, talk, stop, cancel,
+#                                            send (the transcript), say:words_with_underscores, show (into app.log)
 #   scripts/ps5lm-app.sh search <words>      search Get models from the PC
 #
 # The app is never killed: it polls /data/PS5LM/quit and leaves through
@@ -94,6 +96,7 @@ case ${1:-} in
     bench-memory) request bench-memory ;;
     mic) request mic "${2:--}" ;;
     stt) request stt "${2:--}" ;;
+    chat) request chat "${2:-show}" ;;
     search) request search "${2:?search words}" ;;
     press) request press "${2:?up|down|left|right|cross|circle|triangle|square|l1|r1|l2|r2}" ;;
     screenshot) screenshot "${2:-}" ;;
@@ -101,5 +104,5 @@ case ${1:-} in
     deploy) deploy ;;
     launch) launch ;;
     cycle) close; deploy; launch ;;
-    *) echo "usage: $0 close|deploy|launch|cycle|screenshot|load|unload|press|fetch|bench-write|bench-read|bench-memory|mic|stt|memory|trim|search" >&2; exit 2 ;;
+    *) echo "usage: $0 close|deploy|launch|cycle|screenshot|load|unload|press|fetch|bench-write|bench-read|bench-memory|mic|stt|chat|memory|trim|search" >&2; exit 2 ;;
 esac
