@@ -18,6 +18,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -59,6 +60,69 @@ std::string g_phase;       // the app still starting
 bool  g_fresh = false;       // seconds after the start: no sensor read yet, no history
 bool  g_no_replies = false;  // ready, nothing asked yet but the app's own vision warm-up
 bool  g_failed = false;      // one request ended in an error
+// PS5LM Lean: the Home chat's states.
+bool  g_others_done = false;  // every other device's request has finished
+bool  g_photo_run = false;    // the PC's photo run holds the model
+bool  g_decision_self = false;  // a decision model, and a message this PS5 sent it
+ps5lm::ChatView g_chat;       // the conversation and the microphone, as the engine would give them
+
+// A voice's level, 0..1: syllables in words, words in phrases.
+float speech_level(float t) {
+    const float phrase = std::max(0.0f, std::sin(t * 1.1f) + 0.35f);  // pauses between phrases
+    const float syllable = std::pow(std::fabs(std::sin(t * 13.0f)), 0.6f) * (0.55f + 0.45f * std::sin(t * 2.3f + 1.0f));
+    return std::clamp(0.03f + 0.8f * std::min(1.0f, phrase) * syllable + 0.03f * std::sin(t * 41.0f), 0.0f, 1.0f);
+}
+
+ps5lm::ChatTurn turn(bool user, const char * text, bool spoken = false) {
+    ps5lm::ChatTurn c;
+    c.role = user ? ps5lm::ChatTurn::Role::user : ps5lm::ChatTurn::Role::assistant;
+    c.text = text;
+    c.spoken = spoken;
+    return c;
+}
+
+// The roof conversation, from the live take on the console (2026-11-11).
+std::vector<ps5lm::ChatTurn> roof_chat() {
+    return {
+        turn(true, "What should I check before buying a house that needs a new roof?", true),
+        turn(false, "Start with what is under the shingles, because that is where the money goes.\n\n"
+                    "- **Layers**: two or more layers of shingles mean a tear-off, which costs more than a re-roof.\n"
+                    "- **Decking**: soft spots or sagging between the rafters mean rotten boards.\n"
+                    "- **Attic**: water stains, daylight through the boards, or mould on the underside.\n"
+                    "- **Flashing** around the chimney, vents and valleys, where most leaks start.\n\n"
+                    "Get a roofer's written quote before you make an offer, and ask the seller for the roof's age and "
+                    "any insurance claims."),
+    };
+}
+
+// A long chat: six older messages no longer fit the context.
+std::vector<ps5lm::ChatTurn> long_chat() {
+    std::vector<ps5lm::ChatTurn> v = roof_chat();
+    const char * qa[][2] = {
+        { "How much does a tear-off usually add?",
+          "Usually $1 to $2 a square foot more than shingling over, or about $2,000 to $4,000 on a 2,000 square foot "
+          "roof: the labour, the dumpster and the disposal fees." },
+        { "And if the decking is rotten?",
+          "Replacing decking runs about $70 to $100 a sheet installed. A roofer will not know how many sheets until "
+          "the old shingles are off, so ask for the per-sheet price in writing." },
+        { "Is a metal roof worth it in Alabama?",
+          "Often, for a house you plan to keep. Metal costs two to three times as much as shingles but lasts 40 to 70 "
+          "years, sheds heat in summer, and stands up to hail better. For a flip, shingles usually win: buyers pay "
+          "for a new roof, not for its material." },
+        { "What about the gutters?",
+          "Replace them with the roof if they are sagging or pulling away: it is cheaper while the crew and the "
+          "ladders are there. Seamless aluminium gutters run about $8 to $12 a foot." },
+        { "Can you sum it up in one line for my notes?",
+          "Check layers, decking, attic and flashing; get a written quote with a per-sheet decking price before you "
+          "offer; shingles for a flip, metal for a keeper; gutters with the roof." },
+    };
+    for (const auto & p : qa) {
+        v.push_back(turn(true, p[0], true));
+        v.push_back(turn(false, p[1]));
+    }
+    v[6].spoken = false;  // one of them typed
+    return v;
+}
 
 ps5lm::Live sample(float seconds, bool generating) {
     ps5lm::Live L;
@@ -215,6 +279,13 @@ ps5lm::Live sample(float seconds, bool generating) {
         L.activity.push_back(a);
         a.id = 131; a.asked = "7 questions, 1 image"; a.answered = "text no 0.01, color black, ad no 0.01, people no 0.00, mood 1.00";
         a.seconds = 2.9; a.questions = 7; L.activity.push_back(a);
+        if (g_decision_self) {
+            // PS5LM Lean: a message sent from Home's box goes to the decision model on its own.
+            a.id = 132; a.client = "127.0.0.1"; a.questions = 2; a.seconds = 0.4;
+            a.asked = "2 questions: I was charged twice for my order and nobody answers my emails";
+            a.answered = "intent refund, angry yes 0.91";
+            L.activity.push_back(a);
+        }
     }
     if (g_empty) {
         L.state = ps5lm::ServerState::no_model;
@@ -279,6 +350,18 @@ ps5lm::Live sample(float seconds, bool generating) {
         }
         L.soc_temp = L.temp_history.back();
         L.soc_power_w = L.power_history.back();
+    }
+    if (g_others_done) {
+        for (auto & e : L.activity) {
+            e.status = e.status == 0 ? 200 : e.status;
+        }
+    }
+    if (g_photo_run) {
+        // The PC's photo run: a listing photo the model is reading now.
+        ps5lm::Exchange p;
+        p.id = 15; p.client = "192.168.1.19"; p.path = "/v1/chat/completions"; p.status = 0; p.seconds = 0;
+        p.asked = "[image] Rate the kitchen's condition in this listing photo";
+        L.activity.push_back(p);
     }
     if (g_failed) {
         ps5lm::Exchange f;
@@ -404,14 +487,28 @@ int main(int argc, char ** argv) {
     float t = 0;
     bool ok = true;
 
-    const auto step = [&](int frames, hui::InputFrame input, bool generating) {
+    g_chat.mic = ps5lm::MicState::idle;  // PS5LM Lean: the base.en model is on the console
+    // `held`: a button kept down through the frames (L2 for a take).
+    const auto run = [&](int frames, hui::InputFrame input, bool generating, uint32_t held) {
         for (int i = 0; i < frames; ++i) {
             dash.set_live(sample(t, generating));
+            if (g_chat.mic == ps5lm::MicState::recording) {
+                g_chat.level = speech_level(t);
+                g_chat.seconds += 1.0 / 60.0;
+            }
+            dash.set_chat(g_chat);
             feedback.clear();
-            dash.update(i == 0 ? input : hui::InputFrame{}, 1.0f / 60.0f, feedback);
+            hui::InputFrame in = i == 0 ? input : hui::InputFrame{};
+            if (held) {
+                in.connected = true;
+                in.held |= held;
+            }
+            dash.update(in, 1.0f / 60.0f, feedback);
+            dash.take_request();
             t += 1.0f / 60.0f;
         }
     };
+    const auto step = [&](int frames, hui::InputFrame input, bool generating) { run(frames, input, generating, 0); };
     const auto shot = [&](const char * name) {
         ps5lm::DashboardFrame frame;
         frame.glass_texture = renderer.glass_texture();
@@ -609,5 +706,138 @@ int main(int argc, char ** argv) {
     step(30, press(A::confirm), false);
     shot("28-models-images-question");
     step(20, press(A::back), false);
+
+    // PS5LM Lean: the Home chat. Push-to-talk on L2 into the message box, R2
+    // sends; the conversation from the engine's ChatView.
+    using M = ps5lm::MicState;
+    const uint32_t L2 = hui::action_bit(A::jump_prev);
+    step(30, press(A::page_prev), false);  // back to Home
+    g_others_done = true;
+    step(40, {}, false);
+    shot("30-chat-empty");
+    step(30, press(A::west), false);  // Square: an example question into the box
+    shot("31-chat-example");
+    step(20, press(A::back), false);  // Circle clears it
+    g_chat.turns = roof_chat();
+    run(20, press(A::jump_prev), false, L2);  // L2 down: the engine loads whisper first
+    g_chat.mic = M::loading;
+    run(20, {}, false, L2);
+    shot("32-chat-loading");
+    g_chat.mic = M::recording;
+    g_chat.seconds = 0;
+    run(250, {}, false, L2);
+    shot("33-chat-recording");
+    step(2, {}, false);  // L2 up: talk_stop
+    g_chat.mic = M::transcribing;
+    step(40, {}, false);
+    shot("34-chat-transcribing");
+    g_chat.mic = M::ready;
+    g_chat.transcript = "How much does a tear-off usually add?";
+    g_chat.transcript_seq = 1;
+    g_chat.transcribe_ms = 1690;
+    g_chat.whisper_loaded = true;
+    g_chat.whisper_mib = 160;
+    step(30, {}, false);
+    shot("35-chat-transcript");
+    step(30, press(A::jump_next), false);  // R2 sends; the engine adds the turn and answers
+    g_chat.mic = M::idle;
+    g_chat.answering = true;
+    g_chat.turns.push_back(turn(true, "How much does a tear-off usually add?", true));
+    g_chat.turns.push_back(turn(false, "Usually $1 to $2 a square foot more than shingling over, or about $2,000 to "
+                                       "$4,000 on a 2,000 square foot roof: the labour, the dumpster and"));
+    g_chat.turns.back().streaming = true;
+    step(40, {}, true);
+    shot("36-chat-answering");
+    g_chat.transcript = "And if the decking is rotten?";
+    g_chat.transcript_seq = 2;
+    step(20, {}, true);
+    step(30, press(A::jump_next), true);  // R2 while it answers: the message waits
+    shot("37-chat-waits-for-reply");
+    g_chat.answering = false;
+    g_chat.turns.back().streaming = false;
+    g_chat.turns.back().text += " the disposal fees.";
+    step(2, {}, false);  // the reply ended: the message that waited goes
+    g_chat.turns.push_back(turn(true, "And if the decking is rotten?", true));
+    g_chat.turns.push_back(turn(false, ""));
+    g_chat.turns.back().streaming = true;
+    g_chat.answering = true;
+    g_photo_run = true;  // ... but the PC's photo run has the model
+    g_others_done = false;
+    step(60, {}, true);
+    shot("38-chat-other-device-first");
+    g_photo_run = false;
+    g_others_done = true;
+    g_chat.answering = false;
+    g_chat.turns.back().streaming = false;
+    g_chat.turns.back().text = "Replacing decking runs about $70 to $100 a sheet installed. A roofer will not know how "
+                               "many sheets until the old shingles are off, so ask for the per-sheet price in writing.";
+    // A take with nothing in it: muted, silent, failed; then no speech model.
+    run(10, press(A::jump_prev), false, L2);
+    g_chat.mic = M::recording;
+    run(60, {}, false, L2);
+    step(2, {}, false);
+    g_chat.mic = M::muted;
+    g_chat.note = "Your controller's microphone is muted (its mute button)";  // chat.cpp's wording
+    step(40, {}, false);
+    shot("39-chat-muted");
+    g_chat.mic = M::silent;
+    g_chat.note = "Nothing heard. Hold the button while you speak";
+    step(40, {}, false);
+    shot("40-chat-silent");
+    g_chat.mic = M::failed;
+    g_chat.note = "Not enough memory for the speech model: it needs 210 MB, 150 MB is free";
+    step(40, {}, false);
+    shot("41-chat-failed");
+    g_chat.mic = M::off;
+    g_chat.note = "No speech model on this console (/data/PS5LM/whisper/ggml-base.en-q5_1.bin)";
+    step(760, {}, false);  // the note has gone
+    shot("42-chat-off");
+    g_chat.mic = M::idle;
+    g_chat.note.clear();
+    // A long chat: six older messages no longer fit the context.
+    g_chat.turns = long_chat();
+    g_chat.dropped = 6;
+    step(40, {}, false);
+    shot("43-chat-long");
+    for (int i = 0; i < 24; ++i) {
+        step(8, nav(D::up), false);
+    }
+    step(20, {}, false);
+    shot("44-chat-long-scrolled-up");
+    for (int i = 0; i < 24; ++i) {
+        step(4, nav(D::down), false);
+    }
+    // Right: the other devices' requests.
+    g_others_done = false;
+    step(30, nav(D::right), true);
+    shot("45-other-devices");
+    step(30, nav(D::left), false);
+    g_others_done = true;
+    // Typing: Triangle opens the keyboard on the box's text; Send or Close.
+    g_chat.transcript = "Which is cheaper over 20 years, metal or shingles";
+    g_chat.transcript_seq = 3;
+    step(20, {}, false);
+    step(40, press(A::north), false);
+    shot("46-chat-keyboard");
+    step(30, press(A::back), false);
+    step(20, press(A::back), false);  // Circle clears the box
+    // A new chat: Square twice.
+    step(30, press(A::west), false);
+    shot("47-chat-new-chat-again");
+    step(240, {}, false);
+    // No model loaded: the chat says so.
+    g_chat.turns.clear();
+    g_chat.dropped = 0;
+    g_empty = true;
+    step(40, {}, false);
+    shot("48-chat-no-model");
+    g_empty = false;
+    // A decision model: no conversation; each message is one request, shown in the chat view.
+    g_decision = true;
+    g_decision_self = true;
+    step(40, {}, false);
+    shot("49-chat-decision");
+    g_decision = false;
+    g_decision_self = false;
     return ok ? 0 : 1;
 }

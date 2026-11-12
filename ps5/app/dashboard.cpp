@@ -70,6 +70,34 @@ constexpr int   kVisibleRows = 7;
 constexpr float kTau = 6.2831853f;
 constexpr const char * kDash = "\xE2\x80\x93";  // an en dash: nothing to show
 
+// PS5LM Lean: Home is the chat first. The chat panel takes the right two
+// thirds at a size read from a couch; the model, its speed, the memory and the
+// console's readings stand in a rail on the left.
+constexpr float kHomeRailW = 508.0f;   // the rail's width, from kLeft
+constexpr float kHomeGap = 44.0f;      // between the rail and the chat
+constexpr float kChatSize = 24.0f;     // the chat's text
+constexpr float kChatPitch = kChatSize + 9;  // a line of it
+constexpr int   kNewestLines = 14;     // the other devices' newest answer: its lines, at most
+constexpr int   kBoxLines = 4;         // the message box grows to this many lines
+constexpr int   kMeterBars = 56;       // the take's level, twenty a second: the last 2.8 s
+
+Rect home_panel() {
+    const float x = kLeft + kHomeRailW + kHomeGap;
+    return { x, 124, kRight - x, 808 };
+}
+float box_text_w(float box_w) { return box_w - 84 - 214; }  // the mic's glyph on the left, Send on the right
+
+// Another device's request the model is answering now, or null. The model
+// answers one request at a time: the chat's reply waits for it.
+const Exchange * running_elsewhere(const Live & L) {
+    for (auto it = L.activity.rbegin(); it != L.activity.rend(); ++it) {
+        if (it->status == 0 && it->client.rfind("127.0.0.1", 0) != 0) {
+            return &*it;
+        }
+    }
+    return nullptr;
+}
+
 constexpr const char * kPageNames[Dashboard::kPages] = { "Home", "Models", "API", "Console", "Settings" };
 constexpr const char * kSectionNames[Dashboard::kSections] = { "On this PS5", "Suggested", "Search", "Downloads" };
 
@@ -596,7 +624,18 @@ Dashboard::Dashboard(const ui::Fonts & fonts) : fonts_(fonts) {
         row.push_back({ ui::KeyKind::character, k[0], k[1] });
     }
     letters.rows.insert(letters.rows.end() - 1, row);
-    prompt_.keyboard.set_layouts({ letters, ui::KeyboardLayout::symbols() });
+    // PS5LM Lean: the keyboard types the Home chat's message; its Done key sends it.
+    ui::KeyboardLayout symbols = ui::KeyboardLayout::symbols();
+    for (ui::KeyboardLayout * layout : { &letters, &symbols }) {
+        for (auto & keys : layout->rows) {
+            for (auto & k : keys) {
+                if (k.kind == ui::KeyKind::done) {
+                    k.label = "Send";
+                }
+            }
+        }
+    }
+    prompt_.keyboard.set_layouts({ letters, symbols });
 }
 
 void Dashboard::open_library() {
@@ -683,8 +722,15 @@ void Dashboard::update(const hui::InputFrame & raw, float dt, ui::Feedback & fee
     } else if (storage_dialog_) {
         update_storage_dialog(input, feedback);
     } else if (prompt_.is_open()) {
-        if (prompt_.handle(input, feedback) == ui::Event::activated) {
-            request_ = { Request::ask, prompt_.text() };
+        // PS5LM Lean: the keyboard edits the message box. Send sends it (or
+        // holds it until the reply ends); Close keeps what was typed.
+        const ui::Event e = prompt_.handle(input, feedback);
+        if (e == ui::Event::activated || e == ui::Event::cancelled) {
+            box_ = prompt_.text();
+            box_spoken_ = box_spoken_ && !box_.empty();
+            if (e == ui::Event::activated) {
+                send_box(feedback);
+            }
         }
     } else if (input.is_pressed(Action::menu) && !dialog) {
         ask_screen_off(ScreenAsk::off, "", feedback);  // PS5LM Lean: Options, from any page
@@ -711,6 +757,7 @@ void Dashboard::update(const hui::InputFrame & raw, float dt, ui::Feedback & fee
     } else if (page_ == kSettingsPage) {
         update_settings(input, feedback);
     }
+    update_chat(input, dt, feedback);  // PS5LM Lean: the take, the transcript, a message that waits
     prompt_.update(dt);
 
     // Where the highlight goes: a section or a row on Models, a category or a
@@ -743,22 +790,208 @@ void Dashboard::update(const hui::InputFrame & raw, float dt, ui::Feedback & fee
     dock_x_.update(dt, 18.0f);
 }
 
+// PS5LM Lean: Home is a chat with the loaded model. L2 held records, and
+// letting go transcribes into the message box; Triangle types into the same
+// box; R2 sends it. Nothing is sent by itself. Left and right switch the panel
+// between the chat and the other devices' requests; up and down scroll the
+// chat.
 void Dashboard::update_home(const hui::InputFrame & input, ui::Feedback & feedback) {
     const bool decision = !live_.decision.empty();
-    const bool serving = live_.state == ServerState::ready || live_.state == ServerState::generating;
+    const MicState mic = chat_.mic;
+    if (talking_) {
+        return;  // L2 held: only letting go, or Circle, counts (update_chat)
+    }
+    if (devices_ && (input.is_pressed(Action::jump_prev) || input.is_pressed(Action::jump_next) ||
+                     input.is_pressed(Action::north) || input.is_pressed(Action::west))) {
+        devices_ = false;  // the chat's buttons bring the chat back, and do what they do there
+    }
     if (input.is_pressed(Action::confirm)) {
         open_library();
         feedback.play(Cue::select);
-    } else if ((input.is_pressed(Action::west) || input.is_pressed(Action::north)) && !serving) {
-        feedback.play(Cue::error);  // nothing answers yet
+    } else if (input.nav == Direction::left || input.nav == Direction::right) {
+        if (!input.nav_repeat && devices_ != (input.nav == Direction::right)) {
+            devices_ = input.nav == Direction::right;
+            feedback.play(Cue::tab);
+        } else if (!input.nav_repeat) {
+            feedback.play(Cue::error);
+        }
+    } else if (devices_) {
+        // The other devices' requests: nothing more to do here.
+    } else if (input.is_pressed(Action::jump_prev)) {
+        // The talk button. A tap is too short to say anything.
+        if (mic == MicState::off) {
+            say("Talking is off", chat_.note.empty() ? std::string("There is no speech model on this PS5") : chat_.note);
+            feedback.play(Cue::error);
+        } else if (mic == MicState::loading || mic == MicState::recording || mic == MicState::transcribing) {
+            feedback.play(Cue::error);  // the last take is still being written down
+        } else if (!input.is_held(Action::jump_prev)) {
+            say("Hold L2 while you speak", "Let go when you are done; the words land here to check before sending");
+            feedback.play(Cue::error);
+        } else {
+            request_ = { Request::talk_start, {} };
+            talking_ = true;
+            levels_.clear();
+            note_left_ = 0;
+            chat_scroll_ = 0;
+            feedback.play(Cue::select);
+        }
+    } else if (input.is_pressed(Action::jump_next)) {
+        send_box(feedback);
+    } else if (input.is_pressed(Action::back)) {
+        if (send_waits_) {
+            send_waits_ = false;  // not sent after all; the text stays
+            feedback.play(Cue::back);
+        } else if (!box_.empty()) {
+            box_.clear();
+            box_spoken_ = false;
+            feedback.play(Cue::back);
+        }
+    } else if (input.nav == Direction::up || input.nav == Direction::down) {
+        const float pitch = kChatPitch * 3;
+        const Rect  view = chat_view();
+        const float most = std::max(0.0f, chat_height(view.w) - view.h);
+        const float next = std::clamp(chat_scroll_ + (input.nav == Direction::up ? pitch : -pitch), 0.0f, most);
+        if (next != chat_scroll_) {
+            chat_scroll_ = next;
+            feedback.play(Cue::focus);
+        } else if (!input.nav_repeat) {
+            feedback.play(Cue::error);
+        }
     } else if (input.is_pressed(Action::west)) {
-        request_ = { Request::ask, (decision ? kDecisionDemos : kChatDemos)[demo_++ % kDemos] };
-        feedback.play(Cue::select);
+        if (!chat_.turns.empty()) {
+            // A new chat forgets this one: the second press within a few
+            // seconds does it.
+            if (new_chat_armed_ > 0) {
+                request_ = { Request::chat_new, {} };
+                new_chat_armed_ = 0;
+                chat_scroll_ = 0;
+                send_waits_ = false;
+                note_left_ = 0;
+                feedback.play(Cue::select);
+            } else {
+                new_chat_armed_ = 4;
+                say("Press Square again to start a new chat", "The model forgets this conversation");
+                feedback.play(Cue::focus);
+            }
+        } else if (box_.empty()) {
+            box_ = (decision ? kDecisionDemos : kChatDemos)[demo_++ % kDemos];  // a question to try, sent with R2
+            box_spoken_ = false;
+            feedback.play(Cue::select);
+        } else {
+            feedback.play(Cue::error);
+        }
     } else if (input.is_pressed(Action::north)) {
         prompt_.set_title(decision ? "Text to decide on" : "Message");
         prompt_.field.set_placeholder(decision ? "A customer message, a review, a ticket" : "Ask anything");
-        prompt_.open(feedback);
+        prompt_.style.done_label = "Send";
+        prompt_.style.cancel_label = "Close";
+        prompt_.open(feedback, box_);
     }
+}
+
+// Every frame, whatever is on the screen: the take ends when L2 comes up (or
+// is dropped when the screen moved away from the chat), a new transcript goes
+// into the box once, and a message held while a reply came is sent.
+void Dashboard::update_chat(const hui::InputFrame & input, float dt, ui::Feedback & feedback) {
+    if (talking_) {
+        const bool away = page_ != kHomePage || devices_ || prompt_.is_open() || screen_ask_ != ScreenAsk::none ||
+                          storage_dialog_ || busy() || countdown_ >= 0;
+        if (away || input.is_pressed(Action::back)) {
+            talking_ = false;
+            request_ = { Request::talk_cancel, {} };
+            feedback.play(Cue::back);
+        } else if (!input.is_held(Action::jump_prev)) {
+            talking_ = false;
+            request_ = { Request::talk_stop, {} };
+        }
+    }
+    // The meter: the take's level twenty times a second.
+    if (chat_.mic == MicState::recording) {
+        level_clock_ += dt;
+        if (level_clock_ >= 0.05f || levels_.empty()) {
+            level_clock_ = 0;
+            levels_.push_back(chat_.level);
+            if (levels_.size() > (size_t) kMeterBars) {
+                levels_.erase(levels_.begin());
+            }
+        }
+    }
+    if (chat_.transcript_seq != taken_seq_) {
+        taken_seq_ = chat_.transcript_seq;
+        if (!chat_.transcript.empty()) {
+            // Spoken again before sending: the new words go after the old.
+            box_ += (box_.empty() ? "" : " ") + chat_.transcript;
+            box_spoken_ = true;
+            feedback.play(Cue::notify);
+        }
+    }
+    if (chat_.mic != mic_seen_) {
+        switch (chat_.mic) {
+            case MicState::muted:
+                say("Microphone muted",
+                    chat_.note.empty() ? std::string("Nothing was recorded: the controller's mute button is on (its light is "
+                                                     "orange). Press it and talk again")
+                                       : chat_.note, false, 10);
+                feedback.play(Cue::error);
+                break;
+            case MicState::silent:
+                say("Nothing heard", chat_.note.empty() ? std::string("Hold L2 the whole time you speak") : chat_.note, false, 10);
+                feedback.play(Cue::error);
+                break;
+            case MicState::failed:
+                say("Could not write it down", chat_.note.empty() ? std::string("Try again") : chat_.note, true, 12);
+                feedback.play(Cue::error);
+                break;
+            default: break;
+        }
+        mic_seen_ = chat_.mic;
+    }
+    note_left_ = std::max(0.0f, note_left_ - dt);
+    new_chat_armed_ = std::max(0.0f, new_chat_armed_ - dt);
+    if (send_waits_ && !chat_.answering && request_.kind == Request::none) {
+        send_waits_ = false;
+        send_box(feedback);
+    }
+}
+
+// R2, or Send on the keyboard: the box goes to the model, unless a reply is
+// still coming (then it waits for it) or nothing could answer.
+void Dashboard::send_box(ui::Feedback & feedback) {
+    const bool serving = live_.state == ServerState::ready || live_.state == ServerState::generating;
+    if (box_.empty()) {
+        say("Nothing to send yet", "Hold L2 to talk, or press Triangle to type");
+        feedback.play(Cue::error);
+    } else if (!serving) {
+        say(live_.state == ServerState::loading ? "The model is still loading" : "No model is loaded",
+            live_.state == ServerState::loading ? "Send it when the model is ready; it stays here"
+                                                : "Cross chooses one; your message stays here");
+        feedback.play(Cue::error);
+    } else if (chat_.answering) {
+        send_waits_ = true;  // sent when the reply ends; Circle takes it back
+        feedback.play(Cue::select);
+    } else {
+        request_ = { Request::ask, box_ };
+        request_.repo = box_spoken_ ? 1 : 0;  // for the engine: some of it was spoken
+        box_.clear();
+        box_spoken_ = false;
+        send_waits_ = false;
+        chat_scroll_ = 0;
+        note_left_ = 0;
+        feedback.play(Cue::select);
+    }
+}
+
+void Dashboard::say(std::string head, std::string detail, bool fault, float seconds) {
+    // The engine's note may start with what the heading says ("Nothing
+    // heard. Hold the button ..."): said once.
+    if (detail.size() > head.size() + 1 && detail.compare(0, head.size(), head) == 0 &&
+        (detail[head.size()] == '.' || detail[head.size()] == ':')) {
+        detail.erase(0, detail.find_first_not_of(" .:", head.size()));
+    }
+    note_head_ = std::move(head);
+    note_detail_ = std::move(detail);
+    note_fault_ = fault;
+    note_left_ = seconds;
 }
 
 void Dashboard::update_models(const hui::InputFrame & input, ui::Feedback & feedback) {
@@ -1242,13 +1475,38 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
     if (picker_ && page_ == kSettingsPage) {
         h = { { ui::Button::circle, "Cancel" }, { ui::Button::cross, "Choose" } };
     } else if (page_ == kHomePage) {
-        // PS5LM Lean: the screen's memory, offered where the memory is shown.
-        h = { { ui::Button::options, "Screen off" }, { ui::Button::l1, "Pages", ui::Button::r1 } };
-        if (live_.state == ServerState::ready || live_.state == ServerState::generating) {
-            h.push_back({ ui::Button::square, "Demo" });
-            h.push_back({ ui::Button::triangle, "Message" });
+        // PS5LM Lean: the chat's buttons for what the box holds; the screen's
+        // memory, offered where the memory is shown.
+        const MicState mic = chat_.mic;
+        const bool can_talk = mic != MicState::off && mic != MicState::loading && mic != MicState::recording &&
+                              mic != MicState::transcribing;
+        const char * model = live_.model_label.empty() ? "Choose a model" : "Change model";
+        if (devices_) {
+            h = { { ui::Button::options, "Screen off" }, { ui::Button::l1, "Pages", ui::Button::r1 },
+                  { ui::Button::dpad, "Chat" }, { ui::Button::cross, model } };
+        } else if (talking_ || mic == MicState::loading || mic == MicState::recording) {
+            h = { { ui::Button::l2, "Let go to finish" }, { ui::Button::circle, "Drop it" } };
+        } else if (!box_.empty()) {
+            if (can_talk) {
+                h.push_back({ ui::Button::l2, "Talk more" });
+            }
+            h.push_back({ ui::Button::triangle, "Edit" });
+            h.push_back({ ui::Button::circle, send_waits_ ? "Don't send" : "Clear" });
+            if (!send_waits_) {
+                h.push_back({ ui::Button::r2, "Send" });
+            }
+            h.push_back({ ui::Button::cross, model });
+        } else {
+            // No room for L1/R1 here: the dock shows the pages.
+            h = { { ui::Button::options, "Screen off" } };
+            if (can_talk) {
+                h.push_back({ ui::Button::l2, "Hold to talk" });
+            }
+            h.push_back({ ui::Button::triangle, "Type" });
+            h.push_back({ ui::Button::square, !chat_.turns.empty() ? (new_chat_armed_ > 0 ? "Again: new chat" : "New chat")
+                                                                   : "Example" });
+            h.push_back({ ui::Button::cross, model });
         }
-        h.push_back({ ui::Button::cross, live_.model_label.empty() ? "Choose a model" : "Change model" });
     } else if (page_ == kConsolePage) {
         h = { { ui::Button::l1, "Pages", ui::Button::r1 }, { ui::Button::l2, "Range", ui::Button::r2 } };
     } else if (page_ == kModelsPage) {
@@ -1315,14 +1573,6 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
 // ---- drawing: Home -------------------------------------------------------------------
 
 namespace {
-
-// PS5LM Lean: Home is the chat first. The requests take the right two thirds
-// at a size read from a couch; the model, its speed, the memory and the
-// console's readings stand in a rail on the left.
-constexpr float kHomeRailW = 508.0f;   // the rail's width, from kLeft
-constexpr float kHomeGap = 44.0f;      // between the rail and the chat
-constexpr float kChatSize = 24.0f;     // the chat's text
-constexpr int   kNewestLines = 14;     // the newest answer's lines, at most
 
 // A console reading on Home: its value now and its last two minutes.
 struct Vital {
@@ -1615,38 +1865,463 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
     draw_requests(l, { cx, 124, kRight - cx, 808 });
 }
 
-// Right: what the network asks of it, as it happens. A single panel, as a car
-// gives the map, with what it has done since it started at the top, like a
-// trip meter, and the latest requests' typical time and failures.
+// ---- drawing: the Home chat (PS5LM Lean) ------------------------------------------------
+
+namespace {
+
+// A microphone, `s` tall, centred on (cx, cy); struck through when off.
+void mic_icon(gfx::DrawList & l, float cx, float cy, float s, Color c, bool slash = false) {
+    const float t = std::max(2.0f, s * 0.09f);
+    l.rounded_rect({ cx - s * 0.17f, cy - s * 0.5f, s * 0.34f, s * 0.58f }, s * 0.17f, c);
+    l.arc(cx, cy - s * 0.1f, s * 0.32f, t, 1.5708f, 3.1416f, c);  // the cradle: 3 o'clock round the bottom to 9
+    l.line(cx, cy + s * 0.22f, cx, cy + s * 0.42f, t, c);
+    l.line(cx - s * 0.18f, cy + s * 0.43f, cx + s * 0.18f, cy + s * 0.43f, t, c);
+    if (slash) {
+        l.line(cx - s * 0.42f, cy - s * 0.46f, cx + s * 0.42f, cy + s * 0.46f, t, c);
+    }
+}
+
+// Three dots that rise in turn: something is on its way.
+float dots(gfx::DrawList & l, float x, float cy, Color c, float clock) {
+    for (int i = 0; i < 3; ++i) {
+        l.circle(x + 5 + 16.0f * (float) i, cy, 4, c.with_alpha(0.3f + 0.7f * (0.5f + 0.5f * std::sin(clock * 6.0f - (float) i))));
+    }
+    return 42;
+}
+
+// A line of the model's answer as the TV shows it: Markdown's emphasis,
+// code and heading marks left out, a list's dashes as bullets.
+std::string plain_line(std::string s) {
+    for (const char * mark : { "**", "`" }) {
+        for (size_t at = s.find(mark); at != std::string::npos; at = s.find(mark, at)) {
+            s.erase(at, std::char_traits<char>::length(mark));
+        }
+    }
+    const size_t lead = s.find_first_not_of(" \t\r");
+    if (lead == std::string::npos) {
+        return {};
+    }
+    s.erase(0, lead);
+    if (s[0] == '#') {
+        s.erase(0, std::min(s.size(), s.find_first_not_of("# ")));
+    } else if (s.size() > 1 && (s[0] == '-' || s[0] == '*') && s[1] == ' ') {
+        s = "\xE2\x80\xA2 " + s.substr(2);
+    }
+    return s;
+}
+
+// The chat's text wrapped, keeping its line breaks; an empty line (half a
+// line tall) between paragraphs.
+std::vector<std::string> chat_wrap(const ui::FontRef & f, const std::string & text, float width) {
+    std::vector<std::string> out;
+    size_t at = 0;
+    while (at <= text.size()) {
+        size_t end = text.find('\n', at);
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+        const std::string line = plain_line(text.substr(at, end - at));
+        if (line.empty()) {
+            if (!out.empty() && !out.back().empty()) {
+                out.emplace_back();
+            }
+        } else {
+            for (auto & s : wrap(f, line, kChatSize, width)) {
+                out.push_back(std::move(s));
+            }
+        }
+        at = end + 1;
+    }
+    while (!out.empty() && out.back().empty()) {
+        out.pop_back();
+    }
+    return out;
+}
+
+float lines_h(const std::vector<std::string> & v) {
+    float h = 0;
+    for (const auto & s : v) {
+        h += s.empty() ? kChatPitch * 0.5f : kChatPitch;
+    }
+    return h;
+}
+
+// One message laid out: what was said, on the right in a bubble, and the
+// model's answer under it on the left, as in any chat. No turn: the line that
+// says the oldest messages are no longer sent.
+constexpr float kBubblePad = 20, kAfterAsk = 18, kAfterAnswer = 36, kMetaH = 34, kDroppedH = 70;
+float bubble_text_w(float w) { return w * 0.78f - 40; }
+
+struct ChatBlock {
+    const ChatTurn *         turn = nullptr;
+    std::vector<std::string> lines;
+    float                    h = 0;
+};
+
+ChatBlock chat_block(const ui::FontRef & f, const ChatTurn & t, float w) {
+    ChatBlock b;
+    b.turn = &t;
+    if (t.role == ChatTurn::Role::user) {
+        b.lines = chat_wrap(f, t.text, bubble_text_w(w));
+        if (b.lines.empty()) {
+            b.lines.push_back(kDash);
+        }
+        b.h = lines_h(b.lines) + kBubblePad + kAfterAsk;
+    } else {
+        b.lines = chat_wrap(f, t.text, w);
+        b.h = std::max(kChatPitch, lines_h(b.lines)) + (t.streaming ? kMetaH : 0) + kAfterAnswer;
+    }
+    return b;
+}
+
+}  // namespace
+
+Rect Dashboard::chat_box() const {
+    const Rect p = home_panel();
+    const float bx = p.x + 28, bw = p.w - 56;
+    int lines = 1;
+    if (!box_.empty()) {
+        lines = std::clamp((int) wrap(fonts_.regular, box_, kChatSize, box_text_w(bw)).size(), 1, kBoxLines);
+    }
+    const float bh = 76 + kChatPitch * (float) (lines - 1);
+    return { bx, p.y + p.h - 28 - bh, bw, bh };
+}
+
+Rect Dashboard::chat_view() const {
+    const Rect p = home_panel(), b = chat_box();
+    const float top = p.y + 90 + 22 + (running_elsewhere(live_) ? 50.0f : 0.0f);
+    const float bottom = b.y - 22 - (note_left_ > 0 ? 46.0f : 0.0f);
+    return { p.x + 56, top, p.w - 112, bottom - top };
+}
+
+float Dashboard::chat_height(float w) const {
+    float h = chat_.dropped > 0 ? kDroppedH : 0;
+    for (const auto & t : chat_.turns) {
+        h += chat_block(fonts_.regular, t, w).h;
+    }
+    return h;
+}
+
+// Right: the chat with the loaded model, or what the other devices on the
+// network ask of it (left and right switch). One panel, as a car gives the
+// map.
 void Dashboard::draw_requests(gfx::DrawList & l, const Rect & p) const {
     const ui::Fonts & f = fonts_;
-    const RequestSummary s = summary_of(live_);
     l.rounded_rect(p, 24, kSurface);
-    const float x = p.x + 56, w = p.w - 112;
-    put(l, f.regular, "Requests", x, p.y + 62, 22, kInk2);
-    std::vector<std::pair<std::string, Color>> trip = { { thousands(live_.served) + " answered", kInk2 } };
-    if (s.typical >= 0) {
-        trip.push_back({ format(s.typical < 10 ? "%.1f s typical" : "%.0f s typical", s.typical), kInk2 });
+    const float x = p.x + 56, w = p.w - 112, hy = p.y + 62;
+    const Exchange * other = running_elsewhere(live_);
+
+    // The two views as tabs; a blue dot while another device is being answered.
+    float tx = x;
+    for (int i = 0; i < 2; ++i) {
+        const bool on = devices_ == (i == 1);
+        const float tw = put(l, f.regular, i == 0 ? "Chat" : "Other devices", tx, hy, 22, on ? kInk : kInk3);
+        if (on) {
+            l.rounded_rect({ tx, p.y + 86, tw, 4 }, 2, kBlue);
+        }
+        tx += tw;
+        if (i == 1 && other) {
+            l.circle(tx + 14, hy - 8, 5, kBlue);
+            tx += 20;
+        }
+        tx += 36;
     }
-    trip.push_back({ thousands(live_.prompt_tokens) + " tokens in", kInk3 });
-    if (live_.decision.empty()) {
-        trip.push_back({ thousands(live_.tokens) + " out", kInk3 });
-    }
-    if (s.failed > 0) {
-        trip.push_back({ format("%.0f failed", (double) s.failed), kRed });
+    ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
+    ui::draw_button(l, f, glyphs, ui::Button::dpad, tx - 8, hy - 8, 26);
+
+    // On the right: the chat's length, or the trip meter of every request.
+    std::vector<std::pair<std::string, Color>> trip;
+    if (devices_) {
+        const RequestSummary s = summary_of(live_);
+        trip.push_back({ thousands(live_.served) + " answered", kInk2 });
+        if (s.typical >= 0) {
+            trip.push_back({ format(s.typical < 10 ? "%.1f s typical" : "%.0f s typical", s.typical), kInk2 });
+        }
+        trip.push_back({ thousands(live_.prompt_tokens) + " tokens in", kInk3 });
+        if (live_.decision.empty()) {
+            trip.push_back({ thousands(live_.tokens) + " out", kInk3 });
+        }
+        if (s.failed > 0) {
+            trip.push_back({ format("%.0f failed", (double) s.failed), kRed });
+        }
+    } else {
+        if (!chat_.turns.empty()) {
+            const double n = (double) chat_.turns.size();
+            trip.push_back({ format(n == 1 ? "%.0f message" : "%.0f messages", n), kInk2 });
+        }
+        if (chat_.dropped > 0) {
+            trip.push_back({ format("%.0f older left out", (double) chat_.dropped), kInk3 });
+        }
+        if (chat_.whisper_loaded && chat_.whisper_mib > 0) {
+            trip.push_back({ format("speech model %.0f MB", (double) chat_.whisper_mib), kInk3 });
+        }
     }
     float rx = x + w;
     for (auto it = trip.rbegin(); it != trip.rend(); ++it) {
-        rx -= put(l, f.regular, it->first, rx, p.y + 62, 20, it->second, gfx::Align::right) + 28;
+        rx -= put(l, f.regular, it->first, rx, hy, 20, it->second, gfx::Align::right) + 28;
     }
     l.line(x, p.y + 90, x + w, p.y + 90, 1.5f, kHair);
-    draw_feed(l, x, w, p.y + 110, p.y + p.h - 26);
+
+    if (devices_) {
+        draw_feed(l, x, w, p.y + 110, p.y + p.h - 26);
+        return;
+    }
+    if (other) {
+        // The model answers one request at a time: say who has it now.
+        const float sy = p.y + 90 + 38;
+        const std::string who = other->client;
+        l.circle(x + 6, sy - 7, 6, kBlue.with_alpha(0.55f + 0.45f * std::sin(clock_ * 4.0f)));
+        float sx = x + 24;
+        sx += put(l, f.regular, who + " is using the model", sx, sy, 20, kInk2);
+        const std::string after = chat_.answering ? "Your reply comes after it" : "";
+        const float aw = after.empty() ? 0 : put(l, f.regular, after, x + w, sy, 20, kInk, gfx::Align::right);
+        const std::string asked = other->asked.empty() ? std::string() : "\xE2\x80\x9C" + other->asked + "\xE2\x80\x9D";
+        put(l, f.regular, f.regular.font->fit(asked, 20, std::max(0.0f, x + w - aw - 40 - (sx + 16))), sx + 16, sy, 20, kInk3);
+        l.line(x, p.y + 90 + 50, x + w, p.y + 90 + 50, 1.0f, kHair);
+    }
+    const Rect view = chat_view();
+    if (!live_.decision.empty() && chat_.turns.empty()) {
+        draw_feed(l, view.x, view.w, view.y, view.y + view.h, true);  // a decision model: each message on its own
+    } else {
+        draw_chat(l, view);
+    }
+    if (note_left_ > 0) {
+        draw_chat_note(l, x, w, chat_box().y - 24);
+    }
+    draw_box(l);
 }
 
-// The conversation: what each device asked, on the right as a message sent,
-// and the model's answer under it on the left, newest at the bottom as in any
-// chat.
-void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float bottom) const {
+// The conversation, newest at the bottom; up and down scroll it.
+void Dashboard::draw_chat(gfx::DrawList & l, const Rect & v) const {
+    const ui::Fonts & f = fonts_;
+    const float x = v.x, w = v.w, top = v.y, bottom = v.y + v.h;
+    const bool serving = live_.state == ServerState::ready || live_.state == ServerState::generating;
+
+    if (chat_.turns.empty()) {
+        // What the chat is for, and how: until the first message.
+        std::string name, build;
+        split_name(live_.model_label, &name, &build);
+        std::vector<std::string> say;
+        std::string title;
+        if (live_.model_label.empty() || live_.state == ServerState::no_model) {
+            title = "No model is loaded";
+            say = { "Cross chooses one. You can talk or type now; the message waits in the box." };
+        } else {
+            title = serving ? "Talk to " + name : name + " is loading";
+            say.push_back(chat_.mic == MicState::off
+                              ? "Press Triangle to type a message, then R2 to send it."
+                              : "Hold L2 and speak. Let go, check the words in the box, and press R2 to send. Or press "
+                                "Triangle to type.");
+            say.push_back("It remembers what was said until you start a new chat.");
+            if (!serving) {
+                say.push_back("You can talk or type now; send when it is ready.");
+            }
+        }
+        float y = top + 64;
+        put(l, f.regular, f.regular.font->fit(title, 36, w), x, y, 36, kInk);
+        y += 52;
+        for (const auto & s : say) {
+            for (const auto & line : wrap(f.regular, s, kChatSize, w * 0.82f)) {
+                put(l, f.regular, line, x, y, kChatSize, kInk2);
+                y += kChatPitch;
+            }
+            y += 10;
+        }
+        return;
+    }
+
+    // Newest first, as many as the view and the scroll need.
+    std::vector<ChatBlock> blocks;
+    float total = 0;
+    bool oldest = false;
+    for (size_t i = chat_.turns.size(); i-- > 0;) {
+        blocks.push_back(chat_block(f.regular, chat_.turns[i], w));
+        total += blocks.back().h;
+        if (i == 0) {
+            oldest = true;
+        } else if (total > chat_scroll_ + v.h + kChatPitch) {
+            break;
+        }
+    }
+    if (oldest && chat_.dropped > 0) {
+        blocks.push_back({});
+        blocks.back().h = kDroppedH;
+        total += kDroppedH;
+    }
+    const float scroll = oldest ? std::min(chat_scroll_, std::max(0.0f, total - v.h)) : chat_scroll_;
+
+    l.push_clip({ x - 56, top, w + 112, v.h });
+    float yb = bottom + scroll;
+    for (const auto & b : blocks) {
+        const float y = yb - b.h;
+        yb = y;
+        if (y > bottom || y + b.h < top) {
+            continue;
+        }
+        if (!b.turn) {
+            // The oldest messages no longer fit the context.
+            const std::string s = std::to_string(chat_.dropped) + (chat_.dropped == 1 ? " earlier message is" : " earlier messages are") +
+                                  " no longer sent to the model";
+            const float sw = f.regular.measure(s, 20);
+            const float cy = y + 28;
+            put(l, f.regular, s, x + w / 2, cy + 7, 20, kInk3, gfx::Align::center);
+            l.line(x, cy, x + w / 2 - sw / 2 - 20, cy, 1.0f, kHair);
+            l.line(x + w / 2 + sw / 2 + 20, cy, x + w, cy, 1.0f, kHair);
+            continue;
+        }
+        const ChatTurn & t = *b.turn;
+        if (t.role == ChatTurn::Role::user) {
+            float bw = 0;
+            for (const auto & s : b.lines) {
+                bw = std::max(bw, f.regular.measure(s, kChatSize));
+            }
+            bw += 40;
+            const float bh = lines_h(b.lines) + kBubblePad;
+            l.rounded_rect({ x + w - bw, y, bw, bh }, 20, t.failed ? kRed.with_alpha(0.6f) : kBlue);
+            float ly = y + kChatSize + 10;
+            for (const auto & s : b.lines) {
+                if (!s.empty() && ly + 8 > top && ly - kChatSize < bottom) {  // only the lines in view cost shapes
+                    put(l, f.regular, s, x + w - bw + 20, ly, kChatSize, kInk);
+                }
+                ly += s.empty() ? kChatPitch * 0.5f : kChatPitch;
+            }
+            if (t.spoken) {
+                mic_icon(l, x + w - bw - 26, y + 26, 24, kInk3);  // said, not typed
+            }
+        } else {
+            float ly = y + kChatSize;
+            if (b.lines.empty() && t.streaming) {
+                dots(l, x + 3, y + 14, kInk2, clock_);  // nothing yet, as a chat shows the other side typing
+            }
+            for (const auto & s : b.lines) {
+                if (!s.empty() && ly + 8 > top && ly - kChatSize < bottom) {
+                    put(l, f.regular, s, x, ly, kChatSize, t.failed ? kRed : kInk);
+                }
+                ly += s.empty() ? kChatPitch * 0.5f : kChatPitch;
+            }
+            if (t.streaming && !b.lines.empty()) {
+                const float mw = put(l, f.regular, "Writing", x, y + std::max(kChatPitch, lines_h(b.lines)) + 24, 20, kInk3);
+                dots(l, x + mw + 10, y + std::max(kChatPitch, lines_h(b.lines)) + 17, kInk3, clock_);
+            }
+        }
+    }
+    l.pop_clip();
+
+    // More above: the top fades. Scrolled up: a way back to the newest.
+    if (yb < top - 1) {
+        l.gradient_rect({ x - 56, top, w + 112, 44 }, 0, kSurface, kSurface.with_alpha(0));
+    }
+    if (scroll > 0) {
+        l.gradient_rect({ x - 56, bottom - 56, w + 112, 56 }, 0, kSurface.with_alpha(0), kSurface);
+        const float pw = 168, ph = 42;
+        const Rect pill{ x + w - pw, bottom - ph - 4, pw, ph };
+        l.rounded_rect(pill, ph / 2, kRaised);
+        ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
+        ui::draw_button(l, f, glyphs, ui::Button::dpad, pill.x + 16, pill.cy(), 24);
+        put(l, f.regular, "Newest", pill.x + 52, pill.cy() + 7, 20, kInk2);
+    }
+}
+
+// The message box: what will be sent, a take being recorded or written down,
+// or what the box is for.
+void Dashboard::draw_box(gfx::DrawList & l) const {
+    const ui::Fonts & f = fonts_;
+    const Rect b = chat_box();
+    const MicState mic = chat_.mic;
+    const bool take = talking_ || mic == MicState::loading || mic == MicState::recording;
+    const float gx = b.x + 42, gy = b.y + 38;                                // the microphone
+    const float tx = b.x + 84, tw = box_text_w(b.w), base = b.y + 47;  // the text
+    if (take) {
+        l.bordered_rect(b, 22, kRaised, 2, kBlue);
+    } else {
+        l.rounded_rect(b, 22, kRaised);
+    }
+
+    if (take) {
+        const float lv = levels_.empty() || mic != MicState::recording ? 0 : tween::clamp01(levels_.back());
+        l.circle(gx, gy, 22 + 7 * std::sqrt(lv), mic == MicState::recording ? kBlue
+                                                    : kBlue.with_alpha(0.45f + 0.35f * std::sin(clock_ * 6.0f)));
+        mic_icon(l, gx, gy, 24, kInk);
+        if (mic != MicState::recording) {
+            const float nw = put(l, f.regular, "Starting the microphone", tx, base, kChatSize, kInk2);
+            dots(l, tx + nw + 12, base - 8, kInk2, clock_);
+            return;
+        }
+        const double s = chat_.seconds;
+        const float nw = put(l, f.regular, "Listening", tx, base, kChatSize, kInk);
+        put(l, f.regular, format("0:%02.0f", std::floor(s)), tx + nw + 18, base, kChatSize, s >= 25 ? kInk : kInk2);
+        // The level of the last few seconds, newest on the right.
+        const float mx = tx + 250, mw = b.x + b.w - 36 - mx, step = mw / (float) kMeterBars;
+        l.line(mx, gy, mx + mw, gy, 1.0f, kHair);
+        for (size_t i = 0; i < levels_.size(); ++i) {
+            const float v = std::sqrt(tween::clamp01(levels_[levels_.size() - 1 - i]));
+            const float h = 4 + 40 * v;
+            l.rounded_rect({ mx + mw - step * (float) (i + 1) + step * 0.2f, gy - h / 2, step * 0.6f, h }, step * 0.3f,
+                           i == 0 ? kInk : kInk2);
+        }
+        return;
+    }
+    if (mic == MicState::transcribing) {
+        l.circle(gx, gy, 22, kBlue.with_alpha(0.25f));
+        l.arc(gx, gy, 25, 3, clock_ * 5.0f, 1.8f, kBlue);
+        mic_icon(l, gx, gy, 24, kInk);
+        const float nw = put(l, f.regular, "Writing it down", tx, base, kChatSize, kInk);
+        dots(l, tx + nw + 12, base - 8, kInk, clock_);
+        if (chat_.seconds > 0) {
+            put(l, f.regular, format("%.0f s of speech", chat_.seconds), b.x + b.w - 30, base, 20, kInk3, gfx::Align::right);
+        }
+        return;
+    }
+
+    mic_icon(l, gx, gy, 24, mic == MicState::off ? kInk3 : kInk2, mic == MicState::off);
+    if (box_.empty()) {
+        if (mic == MicState::off) {
+            const float nw = put(l, f.regular, "Press Triangle to type", tx, base, kChatSize, kInk3);
+            const std::string why = "Talking is off: " + (chat_.note.empty() ? std::string("no speech model") : chat_.note);
+            put(l, f.regular, f.regular.font->fit(why, 20, b.x + b.w - 30 - (tx + nw + 28)), tx + nw + 28, base, 20, kInk3);
+        } else {
+            put(l, f.regular, "Hold L2 to talk, or press Triangle to type", tx, base, kChatSize, kInk3);
+        }
+        return;
+    }
+    std::vector<std::string> lines = wrap(f.regular, box_, kChatSize, tw);
+    if (lines.size() > (size_t) kBoxLines) {
+        lines.resize(kBoxLines);
+        lines.back() = f.regular.font->fit(lines.back() + " \xE2\x80\xA6", kChatSize, tw);
+    }
+    for (size_t i = 0; i < lines.size(); ++i) {
+        put(l, f.regular, lines[i], tx, base + kChatPitch * (float) i, kChatSize, kInk);
+    }
+    // How it goes: R2 sends, or it waits for the reply.
+    const float rx = b.x + b.w - 30;
+    if (send_waits_) {
+        const float ww = put(l, f.regular, "Waits for the reply", rx, base, 20, kInk2, gfx::Align::right);
+        l.circle(rx - ww - 16, base - 7, 6, kBlue.with_alpha(0.55f + 0.45f * std::sin(clock_ * 4.0f)));
+    } else {
+        const float sw = put(l, f.regular, "Send", rx, base, 22, kInk, gfx::Align::right);
+        ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
+        ui::draw_button(l, f, glyphs, ui::Button::r2, rx - sw - 12 - ui::button_width(ui::Button::r2, 30), base - 8, 30);
+    }
+}
+
+// Over the box: why a take gave nothing, why a message did not go, or what a
+// second press does. It stays a few seconds.
+void Dashboard::draw_chat_note(gfx::DrawList & l, float x, float w, float y) const {
+    const ui::Fonts & f = fonts_;
+    const float a = std::min(1.0f, note_left_ / 0.4f);  // fades out over its last moment
+    const float hw = put(l, f.regular, note_head_, x, y, 22, (note_fault_ ? kRed : kInk).with_alpha(a));
+    if (!note_detail_.empty()) {
+        put(l, f.regular, f.regular.font->fit(note_detail_, 20, std::max(0.0f, w - hw - 24)), x + hw + 24, y, 20,
+            kInk2.with_alpha(a));
+    }
+}
+
+// The other devices on the network: what each asked, on the right as a
+// message sent, and the model's answer under it on the left, newest at the
+// bottom. This PS5's own chat has the other view. `self`: only this PS5's
+// own requests instead (a decision model has no conversation: each message
+// is one request, and the chat view shows them so).
+void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float bottom, bool self) const {
     const ui::Fonts & f = fonts_;
     constexpr float ts = kChatSize, ask_pitch = ts + 8, answer_pitch = ts + 9;  // a question's lines, an answer's
     struct Turn {
@@ -1669,9 +2344,9 @@ void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float 
     std::vector<Turn> turns;
     float total = 0;
     for (auto it = live_.activity.rbegin(); it != live_.activity.rend(); ++it) {
-        // The app's own vision warm-up is not a request anyone made; it stays
-        // out of the chat.
-        if (is_warm_up(*it)) {
+        // This PS5's own requests are the chat (and the vision warm-up, which
+        // nobody asked for): they stay out of the other devices' view.
+        if (is_warm_up(*it) || (it->client.rfind("127.0.0.1", 0) == 0) != self) {
             continue;
         }
         const bool newest = turns.empty();
@@ -1689,10 +2364,20 @@ void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float 
             break;  // the oldest shown runs off the top, as a chat scrolls
         }
     }
-    if (turns.empty()) {
-        put(l, f.regular, "Requests from other devices appear here, as a chat.", x, top + 40, ts, kInk3);
-        if (live_.state == ServerState::ready || live_.state == ServerState::generating) {
-            put(l, f.regular, "Square sends a demo, Triangle a message of your own.", x, top + 40 + ts + 14, ts, kInk3);
+    if (turns.empty() && self) {
+        std::string name, build;
+        split_name(live_.model_label, &name, &build);
+        put(l, f.regular, f.regular.font->fit("Decide with " + name, 36, w), x, top + 64, 36, kInk);
+        float y = top + 116;
+        for (const auto & s : wrap(f.regular, "Hold L2 and speak, or press Triangle to type, then R2: the decision model "
+                                              "answers each message on its own, here.", ts, w * 0.82f)) {
+            put(l, f.regular, s, x, y, ts, kInk2);
+            y += ts + 9;
+        }
+    } else if (turns.empty()) {
+        put(l, f.regular, "Requests from other devices on your network appear here.", x, top + 40, ts, kInk3);
+        if (!live_.address.empty()) {
+            put(l, f.regular, "They reach the model at http://" + live_.address, x, top + 40 + ts + 14, ts, kInk3);
         }
     }
     float y = bottom - total;
@@ -1700,7 +2385,7 @@ void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float 
         const Exchange & e = *t->e;
         const bool running = e.status == 0;
         const bool fault = e.status >= 400;
-        const std::string who = e.client.rfind("127.0.0.1", 0) == 0 ? std::string("This PS5") : e.client;
+        const std::string who = self ? std::string("This PS5") : e.client;
         if (y >= top) {
             put(l, f.regular, who + "    " + e.path, x + w, y + 19, 20, kInk3, gfx::Align::right);
         }
