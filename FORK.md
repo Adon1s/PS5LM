@@ -167,6 +167,9 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - The running model, when `app-args.txt` started it (no planner line), says "running with its own settings
     (app-args.txt)" instead of the planner's plan, which may not be what it runs (Q2_K_XL runs with images there).
   - The planner's log line notes "(images with the screen off)" for such models.
+  - On the console (lean.16, screen on, 8k cap, f16 cache): IQ3_XXS "Text only" (images need 12.9 GiB), the running
+    Q2_K_XL "running with its own settings (app-args.txt)", and the planner log marks Q2_K_XL "(images with the
+    screen off)" (images need 11.9 GiB; 11.8 free with the screen on). Standing setting after it: 1,084 MiB when ready.
 - 2026-11-12 (lean.17): Home puts the chat first (built in its own session on `ui/home-overhaul`, `7dfb4be`; Steven
   picked it from PC renders over a vitals strip and a console card).
   - Right, two thirds: the Requests panel (text 24 px, the newest answer up to 14 lines, the newest question always
