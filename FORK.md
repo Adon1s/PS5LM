@@ -141,6 +141,8 @@ What is changed, newest last:
     - Sleep timer at 5 minutes (set from Settings with button presses): the countdown started 5 min after the
       last press, the screen slept 5 s later (338 / 539 -> 658 / 885), and one press of Square woke it in place in
       197 ms (338 / 547), on the page it was on. `screen.txt` stayed `on` throughout.
+    - Steven's controller, on the standing setting (started without the screen): Triangle held 2 s brought the
+      screen straight back, no reload.
 
 - 2026-11-12 (lean.15): the planner's figures on the models and Search pages (`ps5/app/model_plan.cpp`).
   - Weights are the tensors llama.cpp loads: a file that declares MTP blocks (`nextn_predict_layers`, Unsloth's
