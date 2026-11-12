@@ -142,6 +142,18 @@ What is changed, newest last:
       last press, the screen slept 5 s later (338 / 539 -> 658 / 885), and one press of Square woke it in place in
       197 ms (338 / 547), on the page it was on. `screen.txt` stayed `on` throughout.
 
+- 2026-11-12 (lean.15): the planner's figures on the models and Search pages (`ps5/app/model_plan.cpp`).
+  - Weights are the tensors llama.cpp loads: a file that declares MTP blocks (`nextn_predict_layers`, Unsloth's
+    Qwen3.8-27B UD quants: 335 MiB) no longer counts them. Q2_K_XL's file is 1,389 MiB larger than IQ2_S's and took
+    exactly 1,054 MiB more of the pool. The base reserve is 0.8 GiB (was 0.75, fitted with the MTP block counted):
+    IQ3_XXS text only at 8k left 950 MiB beyond weights, cache and state after a 5-minute load at `-ub 256`.
+  - A model that does not fit with its projector is planned text only when that fits, and its line says what images
+    would need: UD-IQ3_XXS was "too big" (13.0 GiB) though it runs text only at 8k with the screen on.
+  - The line says "of X GiB free": X is what is free before loading (the 12.2 GiB pool less the screen's share).
+  - Planner on the PC's files at lean.12's budgets (screen on 11.8 GiB free / off 12.1): IQ2_S images 64k q4_0;
+    Q2_K_XL images 4k q8_0 / 16k q4_0 (was too big with the screen on); IQ3_XXS text only 32k / 64k q4_0 (was too big);
+    Q5_K_M too big. Host tests: MTP bytes from the tensor list, a header cut short, the text-only fallback.
+
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
 PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.

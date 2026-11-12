@@ -35,8 +35,16 @@ struct Gguf {
         n++;
         return *this;
     }
-    // magic, version 3, tensor count, metadata count, metadata
-    std::string bytes() const { return "GGUF" + raw<uint32_t>(3) + raw<uint64_t>(0) + raw(n) + kvs; }
+    // PS5LM Lean: tensor entries (one dimension, type 0) at data offsets.
+    std::string tensors;
+    uint64_t    n_tensors = 0;
+    Gguf & tensor(const std::string & name, uint64_t offset) {
+        tensors += str(name) + raw<uint32_t>(1) + raw<uint64_t>(1) + raw<uint32_t>(0) + raw(offset);
+        n_tensors++;
+        return *this;
+    }
+    // magic, version 3, tensor count, metadata count, metadata, tensor list
+    std::string bytes() const { return "GGUF" + raw<uint32_t>(3) + raw(n_tensors) + raw(n) + kvs + tensors; }
 };
 
 bool has_args(const ps5lm::Plan & p, const char * flag, const char * value) {
@@ -181,7 +189,7 @@ int main(int argc, char ** argv) {
         assert(has_args(gp, "-ub", "2048") && has_args(gp, "-b", "2048"));
         assert(std::find(gp.args.begin(), gp.args.end(), "--image-max-tokens") == gp.args.end());
         // It keeps the vision headroom: base, image encoder, 0.5 for photos.
-        assert(vp.reserve_gib >= 0.75 + 0.25 + 0.5);
+        assert(vp.reserve_gib >= 0.8 + 0.25 + 0.5);
         // The name rule still comes first: a projector named after the model wins.
         write("mmproj-Qwen3.8-27B-Q8_0.gguf", f16, 0);
         assert(ps5lm::read_model_info(at + "/Qwen3.8-27B-UD-IQ2_S.gguf").mmproj == at + "/mmproj-Qwen3.8-27B-Q8_0.gguf");
@@ -193,6 +201,51 @@ int main(int argc, char ** argv) {
             unlink((at + "/" + n).c_str());
         }
         rmdir(dir);
+    }
+
+    // PS5LM Lean: tensors llama.cpp does not load (the MTP block a file
+    // declares with nextn_predict_layers) stay out of the weights; a header cut
+    // before the end of its tensor list leaves them counted.
+    {
+        Gguf mtp;
+        mtp.kv("general.architecture", "qwen35").kv("general.name", "Qwen3.8-27B")
+            .kv("qwen35.block_count", 3u).kv("qwen35.nextn_predict_layers", 1u)
+            .kv("qwen35.attention.head_count", 16u).kv("qwen35.attention.head_count_kv", 4u)
+            .kv("qwen35.embedding_length", 4096u).kv("qwen35.context_length", 262144u)
+            .tensor("blk.0.ffn_up.weight", 0).tensor("blk.1.ffn_up.weight", 1000)
+            .tensor("blk.2.nextn.eh_proj.weight", 2000).tensor("blk.2.ffn_up.weight", 2500)
+            .tensor("output.weight", 3000);
+        const std::string head = mtp.bytes();
+        const uint64_t    file = (head.size() + 31) / 32 * 32 + 4000;
+        const ps5lm::ModelInfo q = ps5lm::read_model_header("Qwen3.8-27B-UD-Q2_K_XL.gguf", head, file);
+        assert(q.ok && q.n_layer == 2 && q.unloaded_bytes == 1000);
+        const ps5lm::ModelInfo cut = ps5lm::read_model_header("Qwen3.8-27B-UD-Q2_K_XL.gguf", head.substr(0, head.size() - 9), file);
+        assert(cut.ok && cut.unloaded_bytes == 0);
+        const double less = ps5lm::plan_model(cut, budget).weights_gib - ps5lm::plan_model(q, budget).weights_gib;
+        assert(less > 999 / 1073741824.0 && less < 1001 / 1073741824.0);
+        assert(ps5lm::read_model_header("Qwen3.5-9B-Q4_K_M.gguf", chat.bytes(), 5ull << 30).unloaded_bytes == 0);
+    }
+
+    // PS5LM Lean: a model too big with its projector but not without it is
+    // planned text only (Qwen 3.8 27B UD-IQ3_XXS, measured text only at 8k with
+    // the screen on, was listed as too big); with room for images, images.
+    {
+        ps5lm::ModelInfo v = c;
+        v.mmproj         = "/nowhere/mmproj-F16.gguf";
+        v.mmproj_bytes   = 1ull << 30;
+        v.projector_type = "qwen3vl_merger";
+        const double text_least   = ps5lm::plan_model(c, 64.0, 4096, "q4_0").total_gib;
+        const double images_least = ps5lm::plan_model(v, 64.0, 4096, "q4_0").total_gib;
+        assert(images_least > text_least + 1.0);
+        const double         between = (text_least + images_least) / 2;
+        const ps5lm::Plan    t       = ps5lm::plan_model(v, between);
+        assert(t.fits && t.text_only && t.images_gib > between);
+        assert(t.why.rfind("text only (images need ", 0) == 0 && t.why.find("GiB free") != std::string::npos);
+        assert(std::find(t.args.begin(), t.args.end(), "--mmproj") == t.args.end() && has_args(t, "-ub", "64"));
+        const ps5lm::Plan room = ps5lm::plan_model(v, images_least + 0.01);
+        assert(room.fits && !room.text_only && has_args(room, "--mmproj", "/nowhere/mmproj-F16.gguf"));
+        const ps5lm::Plan none = ps5lm::plan_model(v, text_least - 0.2);
+        assert(!none.fits && !none.text_only && none.why.find("needs") == 0);
     }
 
     if (argc < 2) {

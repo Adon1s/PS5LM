@@ -26,6 +26,12 @@ struct ModelInfo {
     std::string basename;   // general.basename ("Qwen3.8-27B")
     std::string base_repo;  // general.base_model.0.repo_url ("https://huggingface.co/Qwen/Qwen3.8-27B")
     uint64_t    file_bytes      = 0;
+    // PS5LM Lean: tensors in the file that llama.cpp does not load: the MTP
+    // (next-token prediction) blocks Unsloth's files carry, 335 MiB in Qwen 3.8
+    // 27B's UD quants. Q2_K_XL's file is 1,389 MiB larger than IQ2_S's (which has
+    // none) and took exactly 1,054 MiB more of the console's pool (2026-11-11).
+    // 0 when the tensor list is beyond the bytes read (a model host's first MBs).
+    uint64_t    unloaded_bytes  = 0;
     uint32_t    n_layer         = 0;
     uint32_t    n_ff            = 0;   // feed-forward width, the widest layer's
     uint32_t    n_head_kv       = 0;
@@ -109,11 +115,17 @@ struct Plan {
     double      state_gib    = 0;
     double      reserve_gib  = 0;   // compute buffers and the CPU side
     double      total_gib    = 0;
+    // PS5LM Lean: the model has a projector but only fits without it; the plan
+    // (and its arguments) are text only. images_gib: what it needs with images.
+    bool        text_only    = false;
+    double      images_gib   = 0;
     std::string why;          // one line for the UI
     std::vector<std::string> args;  // full llama-server arguments
 };
 
 // budget_gib: device memory free before loading (the app reads it from ggml).
+// A model with a projector that does not fit with it is planned again without
+// it (Plan::text_only), so a model that runs text only is not called too big.
 // kv_force: one cache type ("f16", "q8_0", "q4_0") instead of the best that fits.
 // ubatch: the prompt batch for a language model (its compute buffers grow with it).
 Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap = 65536, const char * kv_force = nullptr,

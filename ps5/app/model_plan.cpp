@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 
@@ -61,6 +62,7 @@ struct Reader {
         }
         pos += f ? 0 : n;
     }
+    uint64_t tell() const { return f ? (uint64_t) std::ftell(f) : pos; }
 };
 
 uint64_t scalar_size(uint32_t t) {
@@ -145,6 +147,48 @@ std::string find_mmproj(const std::string & model_path) {
 
 namespace {
 
+// PS5LM Lean: the bytes of the tensors in blocks from `first_layer` on (the MTP
+// blocks), sized by their offsets in the tensor list that `r` is at. 0 when
+// the list cannot be read whole.
+uint64_t unloaded_tensor_bytes(Reader & r, uint64_t n_tensors, uint64_t first_layer, uint64_t align,
+                               uint64_t file_bytes) {
+    struct Tensor {
+        uint64_t offset;
+        bool     unloaded;
+    };
+    std::vector<Tensor> tensors;
+    for (uint64_t i = 0; i < n_tensors && !r.bad && i < (1u << 20); i++) {
+        const std::string name = r.str();
+        const uint32_t    dims = r.get<uint32_t>();
+        if (dims > 8) {
+            r.bad = true;
+            break;
+        }
+        r.skip(8ull * dims);
+        r.get<uint32_t>();  // type
+        const uint64_t offset = r.get<uint64_t>();
+        const bool     block  = name.rfind("blk.", 0) == 0;
+        const uint64_t layer  = block ? std::strtoull(name.c_str() + 4, nullptr, 10) : 0;
+        tensors.push_back({ offset, (block && layer >= first_layer) || name.find(".nextn.") != std::string::npos });
+    }
+    if (r.bad || tensors.size() != n_tensors) {
+        return 0;
+    }
+    const uint64_t data = (r.tell() + align - 1) / align * align;
+    if (data >= file_bytes) {
+        return 0;
+    }
+    std::sort(tensors.begin(), tensors.end(), [](const Tensor & a, const Tensor & b) { return a.offset < b.offset; });
+    uint64_t sum = 0;
+    for (size_t i = 0; i < tensors.size(); i++) {
+        const uint64_t end = i + 1 < tensors.size() ? tensors[i + 1].offset : file_bytes - data;
+        if (tensors[i].unloaded && end > tensors[i].offset) {
+            sum += end - tensors[i].offset;
+        }
+    }
+    return sum < file_bytes ? sum : 0;
+}
+
 // Reads a GGUF header from `f` (and closes it). `file_bytes` is the whole
 // file's size when `f` holds only its start; 0 to measure `f`.
 ModelInfo parse_model_info(Reader r, const std::string & path, uint64_t file_bytes) {
@@ -166,7 +210,7 @@ ModelInfo parse_model_info(Reader r, const std::string & path, uint64_t file_byt
         return m;
     }
     r.get<uint32_t>();  // version
-    r.get<uint64_t>();  // tensor count
+    const uint64_t n_tensors = r.get<uint64_t>();
     const uint64_t n_kv = r.get<uint64_t>();
 
     std::map<std::string, uint64_t> ints;  // every scalar, and the largest element of numeric arrays
@@ -200,14 +244,29 @@ ModelInfo parse_model_info(Reader r, const std::string & path, uint64_t file_byt
             ints[key] = read_int(r, t);
         }
     }
-    if (f) {
+    const bool meta_bad = r.bad;
+    if (!file_bytes && f) {
+        const long here = std::ftell(f);
         std::fseek(f, 0, SEEK_END);
+        file_bytes = (uint64_t) std::ftell(f);
+        std::fseek(f, here, SEEK_SET);
     }
-    m.file_bytes = file_bytes ? file_bytes : f ? (uint64_t) std::ftell(f) : r.size;
+    m.file_bytes = file_bytes ? file_bytes : r.size;
+    // PS5LM Lean: a file that declares MTP blocks (nextn_predict_layers) also
+    // holds their tensors, which llama.cpp does not load: their bytes, from the
+    // tensor list after the metadata, stay out of the weights. Optional: a list
+    // cut short leaves them counted, as before.
+    const std::string arch_dot = strs["general.architecture"] + ".";
+    const uint64_t    n_mtp    = ints.count(arch_dot + "nextn_predict_layers") ? ints[arch_dot + "nextn_predict_layers"] : 0;
+    const uint64_t    n_blocks = ints.count(arch_dot + "block_count") ? ints[arch_dot + "block_count"] : 0;
+    if (!meta_bad && n_mtp > 0 && n_blocks > n_mtp) {
+        const uint64_t align = ints.count("general.alignment") && ints["general.alignment"] ? ints["general.alignment"] : 32;
+        m.unloaded_bytes = unloaded_tensor_bytes(r, n_tensors, n_blocks - n_mtp, align, m.file_bytes);
+    }
     if (f) {
         std::fclose(f);
     }
-    if (r.bad) {
+    if (meta_bad) {
         m.error = "metadata could not be read";
         return m;
     }
@@ -408,7 +467,7 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
     if (m.n_ctx_train) {
         ctx_cap = std::min(ctx_cap, m.n_ctx_train);
     }
-    p.weights_gib = (m.file_bytes + m.mmproj_bytes) / kGiB;
+    p.weights_gib = (m.file_bytes - m.unloaded_bytes + m.mmproj_bytes) / kGiB;
     p.state_gib   = m.state_bytes / kGiB;
     // Compute buffers and the CPU side (the title heap shares the pool), plus
     // one prompt checkpoint of the recurrent state. Calibrated on the console:
@@ -432,7 +491,13 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
     // PS5LM Lean: a causal vision model keeps the 0.5 as headroom. Each photo
     // needs working memory and the CPU heap creeps over a run: at 0.56 GiB free
     // at load, a 1280x1261 photo ran out at photo 23 (2026-11-11).
-    p.reserve_gib = 0.75 + p.state_gib + (m.mmproj.empty() ? 0.0 : 0.25) + (wide || causal_vision ? 0.5 : 0.0) + ub_extra;
+    // PS5LM Lean: 0.8, not 0.75, now that the weights leave out what llama.cpp
+    // does not load (the 0.75 was fitted with a file's MTP block counted).
+    // Measured on the console (2026-11-11, lean.11, screen off): Qwen3.8-27B
+    // UD-IQ3_XXS text only, 8k f16 cache, -ub 256, no checkpoint: 950 MiB beyond
+    // the loaded weights, the cache and the state after a 5-minute text load,
+    // which is 0.81 GiB at -ub 64 by the ubatch rule below.
+    p.reserve_gib = 0.8 + p.state_gib + (m.mmproj.empty() ? 0.0 : 0.25) + (wide || causal_vision ? 0.5 : 0.0) + ub_extra;
 
     // Window layers hold the window and one ubatch, padded to 256, whatever
     // the context (llama.cpp's iSWA cache without --swa-full).
@@ -471,18 +536,34 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
         }
     }
 
-    char why[160];
+    char why[200];
     if (!p.fits) {
         // PS5LM Lean: the least it needs, cache included: the shortest context
         // with the smallest cache (the line left the cache out, so a model short
         // by its cache read as if it fit).
         p.total_gib = p.weights_gib + p.state_gib + p.reserve_gib +
                       kv_at(std::min<uint32_t>(4096, std::max<uint32_t>(ctx_cap, 1)), kv_force ? kv_force : "q4_0");
+        // PS5LM Lean: too big with its projector, perhaps not without it (Qwen
+        // 3.8 27B UD-IQ3_XXS runs text only at 8k with the screen on).
+        if (!m.mmproj.empty()) {
+            ModelInfo text = m;
+            text.mmproj.clear();
+            text.mmproj_bytes = 0;
+            text.projector_type.clear();
+            Plan t = plan_model(text, budget_gib, ctx_cap, kv_force, ubatch);
+            if (t.fits) {
+                t.text_only  = true;
+                t.images_gib = p.total_gib;
+                std::snprintf(why, sizeof(why), "text only (images need %.1f GiB): %s", p.total_gib, t.why.c_str());
+                t.why = why;
+                return t;
+            }
+        }
         std::snprintf(why, sizeof(why), "needs %.1f GiB with a 4k context; %.1f GiB is free", p.total_gib, budget_gib);
         p.why = why;
         return p;
     }
-    std::snprintf(why, sizeof(why), "%s%uk context, %s cache%s: %.1f of %.1f GiB",
+    std::snprintf(why, sizeof(why), "%s%uk context, %s cache%s: %.1f of %.1f GiB free",
                   m.decision.empty() ? "" : ("decision model (" + m.decision + "), ").c_str(), p.ctx / 1024,
                   p.kv_type.c_str(), m.mmproj.empty() ? "" : ", images", p.total_gib, budget_gib);
     p.why = why;
