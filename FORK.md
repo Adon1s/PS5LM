@@ -83,6 +83,45 @@ What is changed, newest last:
     and f16 cache, **screen on**: 496 MiB free when ready, 382 after a 5-minute text load (25 requests of ~1,800
     prompt tokens, 0 errors, flat from the 10th), 19.3 tokens a second (IQ2_S: 20.1). Screen off (lean.11): 676 and
     552.
+- 2026-11-11 (lean.13, `c1a34b4`): the screens say what the screen costs, and turning it off is easy to find.
+  - Home's memory meter is one bar in three parts: what the model (or the app) holds, the screen's share in blue,
+    and what is free, with a key under it; it shows with no model too. Home has an "Options: Screen off" hint;
+    Options asks from any page.
+  - Turning the screen off: one question (what it frees on this console, that the TV keeps the app's picture and
+    the server keeps answering, Triangle held 2 s brings it back, that it stays off at the next start), then five
+    seconds on the TV saying the same (Circle stays on, Cross goes at once), then the screen closes **in place**:
+    the model keeps running, and `screen.txt` = `off` keeps it so at the next start. Before, the restart's message
+    was on the TV for three frames.
+  - With no screen, any button other than Triangle (or Triangle let go early) gets a notification on how to turn
+    it on, at most every 20 s (the first 20 s after a close count the close's own notification); a start without
+    a screen says what it saves. The Triangle hold is timed in microseconds.
+  - Settings: "Screen and memory" is the first category: "Turn the screen off" (in place, with the measured
+    figure), "Turn off and reload the model" (the restart: the memory in one piece), the memory bar, and how to
+    bring the screen back. The "(test)" row is gone; the PC's `screen off-now` still does it.
+  - The screen's cost is measured at each start with the screen on (largest free block before the display and
+    after its first frame), logged and kept in `/data/PS5LM/screen-cost.txt`; "about 360 MB" until then.
+  - Models and Search: a model too big with the screen on but not without it says "Fits with the screen off" and
+    how far short it is, and Cross asks to load it with the screen off (one restart without it). A model too big
+    either way says what it needs and what this PS5 has for a model. The planner's "needs" figure now includes the
+    cache at 4k. A model running from `app-args.txt` says so instead of "too big". (On this console no model in
+    the library falls between the two: the planner over-counts the Qwen UD files, see IQ3_XXS above.)
+  - Home: "No replies yet" before the first reply; the app's own vision warm-up stays out of the request feed;
+    "reads images" when a projector is loaded.
+  - `Display::open` closes what it opened when a step fails, and the display opens again after `close()`: the PC's
+    `screen on-now` reopens it in place when the pool has the room (else the restart). Sound starts only with a
+    screen. Memory lines `display open` and `renderer and fonts ready` split the screen's cost.
+  - The app asks for a surface without depth or stencil, but **the GL port ignores it**: its window always gets a
+    32-bit depth + 8-bit stencil buffer (`ps5_egl.c`: one fixed visual, `Z32_FLOAT_S8X24`); the log says
+    `depth 32, stencil 8`. No saving; `display.txt` = `depth` changes nothing either.
+  - Measured on the console (Qwen3.8-27B UD-Q2_K_XL + F16 projector, MiB, largest free block / all free):
+    - Screen on, against lean.12: 12,068 before loading (same); **712 / 723 when ready** (710 / 723); 304 / 533
+      after the warm-up (274 / 530). The screen holds 372 MiB (lean.12: 370): 338 when the display opens (the GL
+      port's 320 MiB render pool, its depth buffer) and 30 for the renderer and fonts. No heavier.
+    - Screen off from the UI (Options, question, countdown): all free 557 -> 903 (+346) in place, `screen.txt` =
+      `off`; a button pressed 20 s later sent the reminder.
+    - Screen on in place (`screen on-now`): 192-195 ms; three off/on cycles during a 600-token reply: open 304 /
+      555 and closed 336 / 899 in every cycle, the reply complete (HTTP 200, 28.8 s, 20.8 tokens a second).
+    - Screen off by restart (the standing setting): 1,084 / 1,096 when ready (lean.12: 1,082 / 1,094).
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add

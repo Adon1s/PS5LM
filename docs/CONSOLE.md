@@ -185,8 +185,10 @@ allocated once at their largest instead of growing photo by photo. `off` in `/da
 At each start with the screen on, PS5LM Lean (lean.13) measures what the screen took (the largest free block before
 the display opens and after its first frame), logs `the screen holds N MiB of the pool`, and keeps N in
 `/data/PS5LM/screen-cost.txt`, so a start without the screen can still say what it saves. `memory display open` and
-`memory renderer and fonts ready` lines split that cost. The screen's surface has no depth or stencil buffer (the
-dashboard uses neither); `depth` in `/data/PS5LM/display.txt` asks for them as before, to measure the difference.
+`memory renderer and fonts ready` lines split that cost (lean.13: 338 MiB at the display, the GL port's 320 MiB
+render pool and its depth buffer, then 30 for the renderer and fonts). The app asks for a surface without depth or
+stencil, which the dashboard never uses, but the GL port gives every window a 32-bit depth and 8-bit stencil buffer
+whatever the config says (one fixed visual in `ps5_egl.c`); the `display:` line reports it.
 
 Point `bench-read` at a model of several GiB on the drive in question (internal storage, the M.2
 drive or USB), so the cache holds little of it; the `O_DIRECT` lines are the drive itself.
