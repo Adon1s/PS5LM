@@ -22,6 +22,7 @@ struct Settings {
     std::string download_dir = "/data/PS5LM/models";  // where the market saves models
     bool        report_kernel_log = false;  // the debug report includes the kernel log
     bool        report_explained  = false;  // what a debug report holds was shown before the first
+    uint32_t    screen_sleep_min  = 0;      // PS5LM Lean: the screen sleeps after this many minutes without a button, 0 never
 
     bool operator==(const Settings &) const = default;
 };

@@ -81,7 +81,7 @@ constexpr int          kMarketChipCount = 7;
 // ---- Settings -------------------------------------------------------------------
 
 enum class Setting : int { auto_load, default_model, ctx_cap, kv_type, sounds, tools, introspect, scratch_limit, clear_scratch, download_dir,
-                           storage, debug_report, report_kernel_log, screen_off, screen_reload };
+                           storage, debug_report, report_kernel_log, screen_off, screen_reload, screen_sleep };
 
 struct SettingRow {
     Setting      id;
@@ -103,8 +103,10 @@ constexpr SettingCategory kCategories[] = {
       { { Setting::screen_off, "Turn the screen off",
           "Frees about 360 MB for the model. Hold Triangle for 2 seconds to bring it back" },
         { Setting::screen_reload, "Turn off and reload the model",
-          "The freed memory in one piece, for a model that needs all of it. About 20 seconds" } },
-      2 },
+          "The freed memory in one piece, for a model that needs all of it. About 20 seconds" },
+        { Setting::screen_sleep, "Sleep the screen after",
+          "No button pressed for this long: the screen sleeps and frees its memory; any button wakes it" } },
+      3 },
     { "Startup",
       { { Setting::auto_load, "Load a model at launch", "Off: the app opens and waits for a choice" },
         { Setting::default_model, "Model to load", "One of the models on this PS5" } },
@@ -139,6 +141,7 @@ constexpr int kDiagnostics = 7;
 constexpr uint32_t     kCtxSteps[] = { 4096, 8192, 16384, 32768, 65536, 131072, 196608, 262144 };
 constexpr const char * kKvSteps[] = { "auto", "f16", "q8_0", "q4_0" };
 constexpr uint32_t     kScratchSteps[] = { 1, 2, 5, 10, 20 };
+constexpr uint32_t     kSleepSteps[] = { 0, 5, 15, 30, 60 };  // PS5LM Lean: minutes, 0 never
 
 constexpr int   kLogLines = 20;
 constexpr float kLogLineH = 29.0f;
@@ -422,6 +425,10 @@ std::string setting_text(const Settings & s, Setting id, const std::vector<Model
         case Setting::ctx_cap: return format("%.0fk tokens", s.ctx_cap / 1024.0);
         case Setting::kv_type: return s.kv_type == "auto" ? "Auto" : s.kv_type;
         case Setting::scratch_limit: return format("%.0f GB", (double) s.scratch_limit_gib);
+        case Setting::screen_sleep:
+            return s.screen_sleep_min == 0  ? std::string("Never")
+                 : s.screen_sleep_min == 60 ? std::string("1 hour")
+                 : format(s.screen_sleep_min == 1 ? "%.0f minute" : "%.0f minutes", (double) s.screen_sleep_min);
         case Setting::download_dir: {
             for (const auto & d : drives) {
                 if (d.models == s.download_dir) {
@@ -514,6 +521,14 @@ std::vector<Choice> choices_of(const Settings & s, Setting id, const std::vector
         case Setting::scratch_limit:
             for (uint32_t g : kScratchSteps) {
                 add(format("%.0f GB", (double) g), "", s.scratch_limit_gib == g, [g](Settings & v) { v.scratch_limit_gib = g; });
+            }
+            break;
+        case Setting::screen_sleep:
+            for (uint32_t m : kSleepSteps) {
+                Settings shown = s;
+                shown.screen_sleep_min = m;
+                add(setting_text(shown, Setting::screen_sleep, models, drives), m == 0 ? "The screen stays on" : "",
+                    s.screen_sleep_min == m, [m](Settings & v) { v.screen_sleep_min = m; });
             }
             break;
         case Setting::download_dir:
@@ -2302,6 +2317,16 @@ void Dashboard::draw_memory(gfx::DrawList & l, float x, float y, float w) const 
     key(kHair, "Free " + gb(free), kInk2);
 }
 
+bool Dashboard::start_sleep_countdown() {
+    if (screen_ask_ != ScreenAsk::none || busy()) {
+        return false;
+    }
+    screen_ask_ = ScreenAsk::sleep;
+    screen_model_.clear();
+    countdown_ = kCountdown;
+    return true;
+}
+
 void Dashboard::ask_screen_off(ScreenAsk what, std::string model, ui::Feedback & feedback) {
     screen_ask_ = what;
     screen_model_ = std::move(model);
@@ -2327,7 +2352,10 @@ void Dashboard::update_screen_off(const hui::InputFrame & input, float dt, ui::F
         }
         return;
     }
-    if (input.is_pressed(Action::back)) {
+    // The sleep timer's countdown: any button keeps the screen on.
+    const bool cancel = screen_ask_ == ScreenAsk::sleep ? (input.pressed != 0 || input.nav != Direction::none)
+                                                        : input.is_pressed(Action::back);
+    if (cancel) {
         screen_ask_ = ScreenAsk::none;
         countdown_ = -1;
         feedback.play(Cue::back);
@@ -2341,6 +2369,7 @@ void Dashboard::update_screen_off(const hui::InputFrame & input, float dt, ui::F
     if (input.is_pressed(Action::confirm) || countdown_ <= 0) {
         request_ = screen_ask_ == ScreenAsk::load       ? Request{ Request::load_screen_off, screen_model_ }
                  : screen_ask_ == ScreenAsk::off_reload ? Request{ Request::screen_off_restart, "" }
+                 : screen_ask_ == ScreenAsk::sleep      ? Request{ Request::screen_sleep, "" }
                                                         : Request{ Request::screen_off, "" };
         screen_ask_ = ScreenAsk::none;
         countdown_ = -1;
@@ -2403,6 +2432,17 @@ void Dashboard::draw_countdown(gfx::DrawList & l) const {
     const ui::Fonts & f = fonts_;
     l.rounded_rect({ 0, 0, 1920, 1080 }, 0, kBase);
     const int left = std::max(1, (int) std::ceil(countdown_));
+    if (screen_ask_ == ScreenAsk::sleep) {
+        // The sleep timer: any button keeps it on, and any button wakes it.
+        put(l, f.display, format("Screen sleeps in %.0f", (double) left), 960, 470, 88, kInk, gfx::Align::center);
+        put(l, f.regular, "Press any button to keep it on", 960, 560, 32, kInk, gfx::Align::center);
+        put(l, f.regular, "Asleep, it gives the model " + screen_mb() + "; any button wakes it.", 960, 612, 24, kInk2,
+            gfx::Align::center);
+        const float track = 360, done = tween::clamp01(1.0f - countdown_ / kCountdown);
+        l.rounded_rect({ 960 - track * 0.5f, 660, track, 3 }, 1.5f, kHair);
+        l.rounded_rect({ 960 - track * 0.5f, 660, std::max(3.0f, track * done), 3 }, 1.5f, kInk);
+        return;
+    }
     put(l, f.display, format("Screen off in %.0f", (double) left), 960, 470, 88, kInk, gfx::Align::center);
     wake_line(l, 960, 560, 32, kInk, true);
     std::string then;

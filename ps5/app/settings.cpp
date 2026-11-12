@@ -28,6 +28,7 @@ Settings load_settings(const char * path) {
     s.download_dir  = j.value("download_dir", s.download_dir);
     s.report_kernel_log = j.value("report_kernel_log", s.report_kernel_log);
     s.report_explained  = j.value("report_explained", s.report_explained);
+    s.screen_sleep_min  = j.value("screen_sleep_min", s.screen_sleep_min);
     return s;
 }
 
@@ -38,6 +39,7 @@ bool save_settings(const char * path, const Settings & s) {
         { "introspect", s.introspect },
         { "scratch_limit_gib", s.scratch_limit_gib }, { "download_dir", s.download_dir },
         { "report_kernel_log", s.report_kernel_log }, { "report_explained", s.report_explained },
+        { "screen_sleep_min", s.screen_sleep_min },
     };
     std::ofstream out(path);
     out << j.dump(2) << "\n";

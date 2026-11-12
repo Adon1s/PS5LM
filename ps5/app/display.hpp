@@ -10,9 +10,8 @@ namespace ps5lm {
 // The TV, through ps5-opengl: one OpenGL 4.6 context, presented at vsync.
 class Display {
   public:
-    // PS5LM Lean: without a depth or stencil buffer unless `depth` (the
-    // dashboard uses neither); a failed open leaves nothing open.
-    bool open(int width, int height, bool depth = false);
+    // PS5LM Lean: a failed open leaves nothing open.
+    bool open(int width, int height);
     void clear(float r, float g, float b);
     // Draws the renderer's frame into the TV's framebuffer.
     void present(hui::gfx::Renderer & renderer);

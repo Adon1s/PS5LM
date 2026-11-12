@@ -1011,12 +1011,8 @@ int main(int, char **) {
     hui::gfx::Font regular, semibold, headline, mono;
     hui::ui::Fonts fonts;
     bool fonts_read = false, screen_up = false, splash_hidden = false;
-    // "depth" in display.txt gives the screen the depth and stencil buffers it
-    // had before lean.13, to measure what leaving them out saves.
-    const std::vector<std::string> display_txt = read_lines(data_path("display.txt"));
-    const bool display_depth = !display_txt.empty() && display_txt[0] == "depth";
     const auto screen_open = [&]() -> bool {
-        if (!display.open(1920, 1080, display_depth)) {
+        if (!display.open(1920, 1080)) {
             return false;
         }
         log_memory("display open", false);
@@ -1345,6 +1341,11 @@ int main(int, char **) {
     // any other button then gets a reminder of that, at most every 20 s.
     uint64_t closed_check_at = 0;
     int64_t  wake_since = 0, hint_at = 0, input_mute_until = 0;
+    // PS5LM Lean (lean.14): the sleep timer's last controller activity; a
+    // screen the timer put to sleep (any button wakes it, and it is not
+    // remembered); a wake asked for while a model loads, done once it is ready.
+    int64_t  last_input_at = last;
+    bool     screen_asleep = false, wake_pending = false;
     // PS5LM Lean: the heap trim (heap_info.hpp), on by default where the heap
     // can; the PC's request file "trim" turns it off and on, "memory each" adds
     // a memory line after every request and after its trim.
@@ -1531,10 +1532,10 @@ int main(int, char **) {
         Dashboard::Request req = dash.take_request();
         bool load_without_screen = false;
         // PS5LM Lean: the screen off from the dashboard (after its question and
-        // countdown), or from the PC: a request file "screen" holding off (a
-        // restart without it), off-now (closed in place, not remembered), on (a
-        // restart with it) or on-now (opened again in place, without a restart).
-        bool wake = false, open_now = false;
+        // countdown) or by the sleep timer, or from the PC: a request file
+        // "screen" holding off (a restart without it), off-now (closed in place,
+        // not remembered), on (a restart with it) or on-now (opened in place).
+        bool wake = false, wake_any = false, open_now = false, restart_on = false;
         if (n % 60 == 40 && req.kind == Dashboard::Request::none) {
             const std::string s = take_request_file(data_path("screen"));
             if (!s.empty()) {
@@ -1545,26 +1546,42 @@ int main(int, char **) {
             } else if (s == "off-now") {
                 req = { Dashboard::Request::screen_off_now, "" };
             } else if (s == "on") {
-                wake = true;
+                restart_on = true;
             } else if (s == "on-now") {
                 open_now = true;
             }
         }
+        // The sleep timer's clock: a press, a held button or a step on the
+        // controller (or from the PC's press file). Sticks and triggers alone
+        // do not count: a drifting stick would keep the screen on. A load or a
+        // restart on the way holds the timer too.
+        if (in.pressed != 0 || in.held != 0 || in.nav != hui::Direction::none || live.state == ServerState::loading ||
+            dash.busy() || restart_at != 0) {
+            last_input_at = now;
+        }
         if (!screen_up) {
-            // Triangle held for 2 seconds: the screen comes back by a restart.
-            // Timed in microseconds: without a screen the loop runs slower than 60 Hz.
-            const bool north = input.held & hui::action_bit(hui::Action::north);
-            const bool early = (input.released & hui::action_bit(hui::Action::north)) && wake_since != 0 &&
-                               now - wake_since < 2000000;
-            wake_since = north ? (wake_since ? wake_since : now) : 0;
-            wake = wake || (wake_since != 0 && now - wake_since >= 2000000);
-            // Any other button, or Triangle let go too soon: how to bring the
-            // screen back, as a notification, at most every 20 s.
-            if (((in.pressed & ~hui::action_bit(hui::Action::north)) != 0 || early) &&
-                (hint_at == 0 || now - hint_at >= 20000000)) {
-                hint_at = now;
-                notify(screen_note);
-                ps5lm::log_line("screen off: a button was pressed, the reminder sent\n");
+            if (screen_asleep) {
+                // Asleep: any button wakes it (a deliberate off needs Triangle).
+                wake_any = in.pressed != 0 || in.nav != hui::Direction::none;
+            } else {
+                // Triangle held for 2 seconds brings it back. Timed in
+                // microseconds: without a screen the loop runs slower than 60 Hz.
+                const bool north = input.held & hui::action_bit(hui::Action::north);
+                const bool early = (input.released & hui::action_bit(hui::Action::north)) && wake_since != 0 &&
+                                   now - wake_since < 2000000;
+                wake_since = north ? (wake_since ? wake_since : now) : 0;
+                wake = wake_since != 0 && now - wake_since >= 2000000;
+                if (wake) {
+                    wake_since = 0;
+                }
+                // Any other button, or Triangle let go too soon: how to bring
+                // the screen back, as a notification, at most every 20 s.
+                if (((in.pressed & ~hui::action_bit(hui::Action::north)) != 0 || early) &&
+                    (hint_at == 0 || now - hint_at >= 20000000)) {
+                    hint_at = now;
+                    notify(screen_note);
+                    ps5lm::log_line("screen off: a button was pressed, the reminder sent\n");
+                }
             }
         }
         const auto restart_with_screen = [&](const char * state) {
@@ -1575,60 +1592,98 @@ int main(int, char **) {
             ps5lm::log_line("screen %s: restarting%s\n", state,
                             models.running.empty() ? "" : (" with " + base_name(models.running)).c_str());
         };
-        if (wake && restart_at == 0 && !screen_up) {
-            restart_with_screen("on");
-            notify("PS5LM Lean: bringing the screen back; the model loads again");
-            restart_at = n + 1;
-        } else if (open_now && restart_at == 0 && !screen_up) {
-            // Opened again in place, when the pool has the room: one block for
-            // the GL port's render pool (320 MiB) and the screen's whole cost
-            // with 256 MiB to spare for the model. Else the restart, as a wake.
+        // The screen opened again in place (lean.14: a wake without a reload,
+        // about 0.2 s), when the pool has the room: one block for the GL port's
+        // render pool (320 MiB), and the screen's whole cost with 256 MiB to
+        // spare for the model. False when it has not (nothing is left open).
+        const auto open_in_place = [&](const char * why) -> bool {
             size_t all = 0;
             int    blocks = 0;
             bool   capped = false;
             free_blocks(0, sceKernelGetDirectMemorySize(), all, blocks, capped);
             const size_t largest = largest_free_bytes();
             const size_t need = (size_t) (screen_cost_gib * 1073741824.0) + (256ull << 20);
-            const bool room = largest >= (322ull << 20) && all >= need && live.state != ServerState::loading;
-            ps5lm::log_line("screen on in place: largest free %zu MiB, all free %zu MiB in %d blocks: %s\n", largest >> 20,
-                            all >> 20, blocks, room ? "opening it" : "too little room, restarting with it");
+            const bool room = largest >= (322ull << 20) && all >= need;
+            ps5lm::log_line("screen on in place (%s): largest free %zu MiB, all free %zu MiB in %d blocks: %s\n", why,
+                            largest >> 20, all >> 20, blocks, room ? "opening it" : "too little room");
             const int64_t t0 = hui::sys::monotonic_us();
-            if (room && screen_open()) {
-                screen_up = true;
-                std::ofstream(data_path("screen.txt")) << "on\n";
-                start_sound();
-                if (!splash_hidden) {
-                    sceSystemServiceHideSplashScreen();
-                    splash_hidden = true;
+            if (!room || !screen_open()) {
+                return false;
+            }
+            screen_up = true;
+            screen_asleep = false;
+            std::ofstream(data_path("screen.txt")) << "on\n";
+            start_sound();
+            if (!splash_hidden) {
+                sceSystemServiceHideSplashScreen();
+                splash_hidden = true;
+            }
+            hui::ui::Feedback quiet;  // the cues of a model readied or a download saved meanwhile
+            dash.update(hui::InputFrame{}, 0.0f, quiet);
+            input_mute_until = hui::sys::monotonic_us() + 500000;  // presses made while it opened, the wake's own
+            last_input_at = hui::sys::monotonic_us();
+            ps5lm::log_line("screen on in place in %.0f ms\n", (hui::sys::monotonic_us() - t0) / 1000.0);
+            log_memory("screen open again", false);
+            return true;
+        };
+        const bool want_screen = wake || wake_any || open_now || wake_pending;
+        if (restart_on && restart_at == 0 && !screen_up) {
+            restart_with_screen("on");
+            notify("PS5LM Lean: bringing the screen back; the model loads again");
+            restart_at = n + 1;
+        } else if (want_screen && restart_at == 0 && !screen_up) {
+            if (live.state == ServerState::loading) {
+                // The load takes the memory the screen would need: after it.
+                if (!wake_pending) {
+                    notify("PS5LM Lean: the screen comes back once the model is ready");
+                    ps5lm::log_line("screen on: waiting for the model to be ready\n");
                 }
-                hui::ui::Feedback quiet;  // the cues of a model readied or a download saved meanwhile
-                dash.update(hui::InputFrame{}, 0.0f, quiet);
-                input_mute_until = hui::sys::monotonic_us() + 500000;  // presses made while it opened
-                ps5lm::log_line("screen on in place in %.0f ms\n", (hui::sys::monotonic_us() - t0) / 1000.0);
-                log_memory("screen open again", false);
+                wake_pending = true;
             } else {
-                restart_with_screen("on");
-                notify("PS5LM Lean: bringing the screen back; the model loads again");
-                restart_at = n + 1;
+                const bool deliberate = wake || open_now || (wake_pending && !wake_any);
+                wake_pending = false;
+                if (!open_in_place(wake_any ? "a button" : wake ? "Triangle" : open_now ? "the PC" : "after the load")) {
+                    if (deliberate) {
+                        restart_with_screen("on");
+                        notify("PS5LM Lean: bringing the screen back; the model loads again");
+                        restart_at = n + 1;
+                    } else if (hint_at == 0 || now - hint_at >= 20000000) {
+                        // A stray press never reloads the model.
+                        hint_at = now;
+                        notify("PS5LM Lean: too little memory is free to wake the screen now. Hold Triangle for 2 "
+                               "seconds to restart the app with it.");
+                    }
+                }
             }
         } else if (req.kind == Dashboard::Request::screen_off_restart && restart_at == 0) {
             restart_with_screen("off");
             dash.set_busy("Turning the screen off",
                           "The model loads again with the screen's memory. Hold Triangle for 2 seconds to bring the screen back.");
             restart_at = n + 3;  // three frames with the busy screen on the TV first
-        } else if ((req.kind == Dashboard::Request::screen_off || req.kind == Dashboard::Request::screen_off_now) &&
+        } else if ((req.kind == Dashboard::Request::screen_off || req.kind == Dashboard::Request::screen_off_now ||
+                    req.kind == Dashboard::Request::screen_sleep) &&
                    screen_up) {
             // In place: the model keeps running. From the dashboard it is
             // remembered (the next start has no screen either); the PC's
-            // off-now is a test and is not.
+            // off-now is a test and is not; the sleep timer's is not, and any
+            // button wakes it.
             log_memory("before the screen closes");
             if (req.kind == Dashboard::Request::screen_off) {
                 std::ofstream(data_path("screen.txt")) << "off\n";
             }
             screen_close();
+            screen_asleep = req.kind == Dashboard::Request::screen_sleep;
             closed_check_at = n + 120;  // and again 2 s later, in case the port frees late
-            log_memory("screen closed");
-            notify(screen_note);
+            log_memory(screen_asleep ? "screen asleep" : "screen closed");
+            if (screen_asleep) {
+                char text[200];
+                std::snprintf(text, sizeof(text),
+                              "PS5LM Lean: the screen is asleep, giving the model %.0f MB. Press any button to wake it.",
+                              std::round(screen_cost_gib * 1024.0 / 10.0) * 10.0);
+                notify(text);
+            } else {
+                notify(screen_note);
+            }
             hint_at = now;
         } else if (req.kind == Dashboard::Request::load_screen_off) {
             // A model that needs the screen's memory: the restart for it starts
@@ -1641,6 +1696,17 @@ int main(int, char **) {
         if (closed_check_at != 0 && n >= closed_check_at) {
             log_memory("screen closed, 2 s later");
             closed_check_at = 0;
+        }
+        // PS5LM Lean: the sleep timer: five seconds on the TV that any button
+        // cancels, then Request::screen_sleep. Refused while a question or slow
+        // work is on the screen: then another full period.
+        if (screen_up && models.settings.screen_sleep_min > 0 && !dash.screen_countdown() &&
+            now - last_input_at >= (int64_t) models.settings.screen_sleep_min * 60000000) {
+            if (dash.start_sleep_countdown()) {
+                ps5lm::log_line("sleep timer: %u min without a button, the countdown starts\n",
+                                models.settings.screen_sleep_min);
+            }
+            last_input_at = now;
         }
         if (req.kind == Dashboard::Request::settings) {
             // The planner's limits change every row's plan; the loaded model

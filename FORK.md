@@ -122,6 +122,18 @@ What is changed, newest last:
     - Screen on in place (`screen on-now`): 192-195 ms; three off/on cycles during a 600-token reply: open 304 /
       555 and closed 336 / 899 in every cycle, the reply complete (HTTP 200, 28.8 s, 20.8 tokens a second).
     - Screen off by restart (the standing setting): 1,084 / 1,096 when ready (lean.12: 1,082 / 1,094).
+- 2026-11-11 (lean.14): the screen comes back without a reload, and can sleep by itself.
+  - Triangle held 2 s opens the screen again **in place** (about 0.2 s; the model keeps running), whether it was
+    turned off from the dashboard or the app started without it, when the pool has the room: one 322 MiB block for
+    the GL port's render pool, and the screen's whole cost with 256 MiB to spare. Without the room, the restart
+    with the screen, as before. Asked for while a model loads, it waits for the model to be ready.
+  - Settings > Screen and memory > "Sleep the screen after": Never (the default), 5, 15 or 30 minutes, or 1 hour
+    without a button press (a press, a held button or a step; sticks and triggers alone do not count; a model load
+    holds it). Then five seconds on the TV that any button cancels, and the screen closes in place. Asleep, **any**
+    button wakes it (in place; a stray press never restarts the app: without the room it says to hold Triangle). A
+    sleep is not remembered: the next start has the screen. Kept as `screen_sleep_min` in `settings.json`.
+  - The PC's `screen on` is still the restart with the screen; `screen on-now` the in-place open.
+  - The lean.13 depth-config request and `display.txt` are gone (the GL port ignored them).
 
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add

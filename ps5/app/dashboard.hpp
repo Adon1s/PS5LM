@@ -56,6 +56,11 @@ class Dashboard {
 
     void set_live(const Live & live) { live_ = live; }
     void set_screen(const ScreenInfo & s) { screen_ = s; }
+    // PS5LM Lean: the sleep timer ran out: five seconds on the TV that any
+    // button cancels, then Request::screen_sleep. False when something else
+    // (a question, a countdown, slow work) is on the screen.
+    bool start_sleep_countdown();
+    bool screen_countdown() const { return countdown_ >= 0; }
     // Slow work in progress: a spinner and these lines over everything, and
     // no input until it is cleared (empty title).
     void set_busy(std::string title, std::string text = {}) {
@@ -99,8 +104,9 @@ class Dashboard {
                     // PS5LM Lean, after the question and the countdown: the screen off in
                     // place and remembered; off and the model reloaded; a model that needs
                     // the screen's memory loaded without it (path). screen_off_now is the
-                    // PC's test request (in place, not remembered).
-                    screen_off, screen_off_restart, load_screen_off, screen_off_now } kind = none;
+                    // PC's test request (in place, not remembered); screen_sleep the
+                    // sleep timer's (in place, not remembered, any button wakes it).
+                    screen_off, screen_off_restart, load_screen_off, screen_off_now, screen_sleep } kind = none;
         std::string path;   // a model, a market query, the folder a download goes to (empty: the setting), or what to ask
         int repo = -1, file = -1;  // a market file, a download's index (repo), or a suggestion's (repo)
     };
@@ -147,7 +153,7 @@ class Dashboard {
 
     // PS5LM Lean: the screen-off question, the countdown after it, and the
     // memory bar that shows the screen's share.
-    enum class ScreenAsk { none, off, off_reload, load };
+    enum class ScreenAsk { none, off, off_reload, load, sleep };
     void ask_screen_off(ScreenAsk what, std::string model, hui::ui::Feedback & feedback);
     void update_screen_off(const hui::InputFrame & input, float dt, hui::ui::Feedback & feedback);
     void draw_screen_question(hui::gfx::DrawList & list) const;

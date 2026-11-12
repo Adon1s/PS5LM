@@ -168,7 +168,7 @@ from a drive instead of holding them in memory (Qwen3.8-Flash-Next on the roadma
 | `trim on` / `trim off` | PS5LM Lean: the heap trim 0.25 s after each request and every 10 s (on by default with `patches/sdk`) |
 | `screen off` / `on` | PS5LM Lean: restart without the screen (`screen.txt` = `off`) or with it; the model loads again |
 | `screen off-now` | PS5LM Lean: close the screen in place, model kept, not remembered (a test) |
-| `screen on-now` | PS5LM Lean (lean.13): open the screen again in place, model kept, when the pool has a 322 MiB block and the screen's cost plus 256 MiB free in all; else the restart, as `on` |
+| `screen on-now` | PS5LM Lean (lean.13): open the screen again in place, model kept, when the pool has a 322 MiB block and the screen's cost plus 256 MiB free in all; else the restart, as `on`. From lean.14 Triangle held 2 s does the same |
 | `press options` | PS5LM Lean (lean.13): the Options button, which asks to turn the screen off |
 
 PS5LM Lean's memory line ends with exact figures, for example `[MiB: largest 1843, all free 1864 in 14 blocks, heap

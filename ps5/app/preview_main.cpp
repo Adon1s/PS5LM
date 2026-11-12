@@ -528,5 +528,10 @@ int main(int argc, char ** argv) {
     step(30, press(A::confirm), false);
     shot("25-models-load-question");
     step(20, press(A::back), false);
+    // PS5LM Lean (lean.14): the sleep timer's countdown, which any button cancels.
+    dash.start_sleep_countdown();
+    step(80, {}, false);
+    shot("26-sleep-countdown");
+    step(20, press(A::west), false);
     return ok ? 0 : 1;
 }
