@@ -180,3 +180,14 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - The vision warm-up no longer counts as an answered request (`stats.cpp`).
   - Cost: the busiest Home frame draws about 1,340 shapes instead of 1,060 (about 27 KB more GPU instance buffer);
     no fonts, textures or images.
+- 2026-11-12 (lean.18): the controller's microphone records (from the mic probe session, `34d2366`, Steven's OK).
+  - A request file `mic` (`ps5/app/mic_probe.cpp`) records from the DualSense microphone on a thread of its own:
+    5 s by default (up to 30), every call's return code, the port's silent state and each second's level in
+    `app.log`, and `mic-test.wav` in the data folder. A probe: no chat screen, no speech-to-text yet.
+  - `libSceAudioIn` is a linked import through a stub made in `scripts/build-app.sh`, as for AGC: a title cannot
+    look a symbol up at run time (`sceKernelDlsym` answered 0x80020003 for every name). It adds two modules at the
+    title's start (libSceAudioIn, libSceSysmodule; the second only for a fallback that never ran).
+  - Measured on the console as 0.11.0-lean.16-mic.1 (`7b9df03`): 16 kHz mono read directly, every read 16.0 ms;
+    the mute button gives exact zeros and silent state 0x4; the model ran 20.96 tokens a second while recording
+    against 21.00 alone; no memory cost (1,084 MiB when ready, flexible 119 free, as lean.16); works with the
+    screen on. Write-up: `docs/handoffs/RESULT-ps5lm-mic-probe-20261111.md` in the RenoIntel tree.
