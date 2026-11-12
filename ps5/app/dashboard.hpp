@@ -144,7 +144,7 @@ class Dashboard {
     void draw_dock(hui::gfx::DrawList & list) const;
     void draw_home(hui::gfx::DrawList & list) const;
     void draw_requests(hui::gfx::DrawList & list, const hui::gfx::Rect & panel) const;
-    void draw_feed(hui::gfx::DrawList & list, float x, float w, float top, float bottom) const;
+    void draw_feed(hui::gfx::DrawList & list, float x, float w, float top, float bottom, bool self = false) const;
     // PS5LM Lean, the Home chat: the conversation, the message box under it,
     // the line over the box that says why nothing was transcribed or sent,
     // and the talk button, the box's buttons and the scroll.

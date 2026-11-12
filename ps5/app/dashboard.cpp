@@ -982,6 +982,12 @@ void Dashboard::send_box(ui::Feedback & feedback) {
 }
 
 void Dashboard::say(std::string head, std::string detail, bool fault, float seconds) {
+    // The engine's note may start with what the heading says ("Nothing
+    // heard. Hold the button ..."): said once.
+    if (detail.size() > head.size() + 1 && detail.compare(0, head.size(), head) == 0 &&
+        (detail[head.size()] == '.' || detail[head.size()] == ':')) {
+        detail.erase(0, detail.find_first_not_of(" .:", head.size()));
+    }
     note_head_ = std::move(head);
     note_detail_ = std::move(detail);
     note_fault_ = fault;
@@ -2074,7 +2080,11 @@ void Dashboard::draw_requests(gfx::DrawList & l, const Rect & p) const {
         l.line(x, p.y + 90 + 50, x + w, p.y + 90 + 50, 1.0f, kHair);
     }
     const Rect view = chat_view();
-    draw_chat(l, view);
+    if (!live_.decision.empty() && chat_.turns.empty()) {
+        draw_feed(l, view.x, view.w, view.y, view.y + view.h, true);  // a decision model: each message on its own
+    } else {
+        draw_chat(l, view);
+    }
     if (note_left_ > 0) {
         draw_chat_note(l, x, w, chat_box().y - 24);
     }
@@ -2308,8 +2318,10 @@ void Dashboard::draw_chat_note(gfx::DrawList & l, float x, float w, float y) con
 
 // The other devices on the network: what each asked, on the right as a
 // message sent, and the model's answer under it on the left, newest at the
-// bottom. This PS5's own chat has the other view.
-void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float bottom) const {
+// bottom. This PS5's own chat has the other view. `self`: only this PS5's
+// own requests instead (a decision model has no conversation: each message
+// is one request, and the chat view shows them so).
+void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float bottom, bool self) const {
     const ui::Fonts & f = fonts_;
     constexpr float ts = kChatSize, ask_pitch = ts + 8, answer_pitch = ts + 9;  // a question's lines, an answer's
     struct Turn {
@@ -2333,8 +2345,8 @@ void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float 
     float total = 0;
     for (auto it = live_.activity.rbegin(); it != live_.activity.rend(); ++it) {
         // This PS5's own requests are the chat (and the vision warm-up, which
-        // nobody asked for): they stay out of this view.
-        if (it->client.rfind("127.0.0.1", 0) == 0) {
+        // nobody asked for): they stay out of the other devices' view.
+        if (is_warm_up(*it) || (it->client.rfind("127.0.0.1", 0) == 0) != self) {
             continue;
         }
         const bool newest = turns.empty();
@@ -2352,7 +2364,17 @@ void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float 
             break;  // the oldest shown runs off the top, as a chat scrolls
         }
     }
-    if (turns.empty()) {
+    if (turns.empty() && self) {
+        std::string name, build;
+        split_name(live_.model_label, &name, &build);
+        put(l, f.regular, f.regular.font->fit("Decide with " + name, 36, w), x, top + 64, 36, kInk);
+        float y = top + 116;
+        for (const auto & s : wrap(f.regular, "Hold L2 and speak, or press Triangle to type, then R2: the decision model "
+                                              "answers each message on its own, here.", ts, w * 0.82f)) {
+            put(l, f.regular, s, x, y, ts, kInk2);
+            y += ts + 9;
+        }
+    } else if (turns.empty()) {
         put(l, f.regular, "Requests from other devices on your network appear here.", x, top + 40, ts, kInk3);
         if (!live_.address.empty()) {
             put(l, f.regular, "They reach the model at http://" + live_.address, x, top + 40 + ts + 14, ts, kInk3);
@@ -2363,7 +2385,7 @@ void Dashboard::draw_feed(gfx::DrawList & l, float x, float w, float top, float 
         const Exchange & e = *t->e;
         const bool running = e.status == 0;
         const bool fault = e.status >= 400;
-        const std::string & who = e.client;
+        const std::string who = self ? std::string("This PS5") : e.client;
         if (y >= top) {
             put(l, f.regular, who + "    " + e.path, x + w, y + 19, 20, kInk3, gfx::Align::right);
         }

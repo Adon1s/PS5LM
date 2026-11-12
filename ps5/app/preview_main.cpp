@@ -63,6 +63,7 @@ bool  g_failed = false;      // one request ended in an error
 // PS5LM Lean: the Home chat's states.
 bool  g_others_done = false;  // every other device's request has finished
 bool  g_photo_run = false;    // the PC's photo run holds the model
+bool  g_decision_self = false;  // a decision model, and a message this PS5 sent it
 ps5lm::ChatView g_chat;       // the conversation and the microphone, as the engine would give them
 
 // A voice's level, 0..1: syllables in words, words in phrases.
@@ -278,6 +279,13 @@ ps5lm::Live sample(float seconds, bool generating) {
         L.activity.push_back(a);
         a.id = 131; a.asked = "7 questions, 1 image"; a.answered = "text no 0.01, color black, ad no 0.01, people no 0.00, mood 1.00";
         a.seconds = 2.9; a.questions = 7; L.activity.push_back(a);
+        if (g_decision_self) {
+            // PS5LM Lean: a message sent from Home's box goes to the decision model on its own.
+            a.id = 132; a.client = "127.0.0.1"; a.questions = 2; a.seconds = 0.4;
+            a.asked = "2 questions: I was charged twice for my order and nobody answers my emails";
+            a.answered = "intent refund, angry yes 0.91";
+            L.activity.push_back(a);
+        }
     }
     if (g_empty) {
         L.state = ps5lm::ServerState::no_model;
@@ -769,10 +777,11 @@ int main(int argc, char ** argv) {
     run(60, {}, false, L2);
     step(2, {}, false);
     g_chat.mic = M::muted;
-    g_chat.note = "";
+    g_chat.note = "Your controller's microphone is muted (its mute button)";  // chat.cpp's wording
     step(40, {}, false);
     shot("39-chat-muted");
     g_chat.mic = M::silent;
+    g_chat.note = "Nothing heard. Hold the button while you speak";
     step(40, {}, false);
     shot("40-chat-silent");
     g_chat.mic = M::failed;
@@ -780,7 +789,7 @@ int main(int argc, char ** argv) {
     step(40, {}, false);
     shot("41-chat-failed");
     g_chat.mic = M::off;
-    g_chat.note = "no speech model in /data/PS5LM/whisper";
+    g_chat.note = "No speech model on this console (/data/PS5LM/whisper/ggml-base.en-q5_1.bin)";
     step(760, {}, false);  // the note has gone
     shot("42-chat-off");
     g_chat.mic = M::idle;
@@ -823,5 +832,12 @@ int main(int argc, char ** argv) {
     step(40, {}, false);
     shot("48-chat-no-model");
     g_empty = false;
+    // A decision model: no conversation; each message is one request, shown in the chat view.
+    g_decision = true;
+    g_decision_self = true;
+    step(40, {}, false);
+    shot("49-chat-decision");
+    g_decision = false;
+    g_decision_self = false;
     return ok ? 0 : 1;
 }
