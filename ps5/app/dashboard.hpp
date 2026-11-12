@@ -36,6 +36,14 @@ struct DashboardFrame {
     std::uint32_t          glass_texture = 0;
 };
 
+// PS5LM Lean: what the screen costs, for Home's memory bar, the screen-off
+// question and the Models page.
+struct ScreenInfo {
+    double cost_gib   = 360.0 / 1024;  // what the screen holds of the pool
+    bool   measured   = false;         // measured on this console (screen-cost.txt)
+    double budget_gib = 0;             // what a model may have with the screen on, from the planner
+};
+
 class Dashboard {
   public:
     static constexpr int kPages = 5;
@@ -47,6 +55,7 @@ class Dashboard {
     explicit Dashboard(const hui::ui::Fonts & fonts);
 
     void set_live(const Live & live) { live_ = live; }
+    void set_screen(const ScreenInfo & s) { screen_ = s; }
     // Slow work in progress: a spinner and these lines over everything, and
     // no input until it is cleared (empty title).
     void set_busy(std::string title, std::string text = {}) {
@@ -87,7 +96,11 @@ class Dashboard {
         enum Kind { none, load, unload, settings, clear_scratch, market_search, market_open, market_plan, market_download,
                     market_download_unload, download_pause, download_resume, download_remove, suggested_download, ask,
                     debug_report, storage_app, restart,
-                    screen_off_restart, screen_off_now } kind = none;  // PS5LM Lean: Settings > Screen
+                    // PS5LM Lean, after the question and the countdown: the screen off in
+                    // place and remembered; off and the model reloaded; a model that needs
+                    // the screen's memory loaded without it (path). screen_off_now is the
+                    // PC's test request (in place, not remembered).
+                    screen_off, screen_off_restart, load_screen_off, screen_off_now } kind = none;
         std::string path;   // a model, a market query, the folder a download goes to (empty: the setting), or what to ask
         int repo = -1, file = -1;  // a market file, a download's index (repo), or a suggestion's (repo)
     };
@@ -132,9 +145,24 @@ class Dashboard {
     void draw_busy(hui::gfx::DrawList & list) const;
     void draw_hints(hui::gfx::DrawList & list) const;
 
+    // PS5LM Lean: the screen-off question, the countdown after it, and the
+    // memory bar that shows the screen's share.
+    enum class ScreenAsk { none, off, off_reload, load };
+    void ask_screen_off(ScreenAsk what, std::string model, hui::ui::Feedback & feedback);
+    void update_screen_off(const hui::InputFrame & input, float dt, hui::ui::Feedback & feedback);
+    void draw_screen_question(hui::gfx::DrawList & list) const;
+    void draw_countdown(hui::gfx::DrawList & list) const;
+    void draw_memory(hui::gfx::DrawList & list, float x, float y, float w) const;
+    std::string screen_mb() const;  // "370 MB"
+    float wake_line(hui::gfx::DrawList & list, float x, float y, float size, hui::gfx::Color c, bool center) const;
+
     const hui::ui::Fonts & fonts_;
     Live        live_;
+    ScreenInfo  screen_;
     Request     request_;
+    ScreenAsk   screen_ask_ = ScreenAsk::none;  // the question is open
+    std::string screen_model_;                  // ... for this model (ScreenAsk::load)
+    float       countdown_ = -1;                // seconds left before the screen goes off, or < 0
 
     float age_   = 0;  // seconds since start
     float clock_ = 0;  // idle motion

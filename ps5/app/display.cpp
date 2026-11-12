@@ -57,6 +57,14 @@ constexpr EGLint kConfig[] = {
     EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
     EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE,
 };
+// PS5LM Lean: the dashboard draws in 2D and clips with the scissor (the kit
+// never enables a depth or stencil test), so its surface needs neither buffer.
+// EGL sorts the smallest depth first, so asking for 0 gets a config without one.
+constexpr EGLint kConfigNoDepth[] = {
+    EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+    EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+    EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_NONE,
+};
 constexpr EGLint kContext[] = {
     EGL_CONTEXT_MAJOR_VERSION_KHR, 4, EGL_CONTEXT_MINOR_VERSION_KHR, 6,
     EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR, EGL_NONE,
@@ -73,7 +81,14 @@ bool fail(const char * what) {
 
 }  // namespace
 
-bool Display::open(int width, int height) {
+bool Display::open(int width, int height, bool depth) {
+    // PS5LM Lean: a step that fails closes what the earlier ones opened, so
+    // the GL port's memory goes back and the display can be opened again.
+    const auto give_up = [&](const char * what) {
+        fail(what);
+        close();
+        return false;
+    };
     g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (g_display == EGL_NO_DISPLAY) {
         return fail("eglGetDisplay");
@@ -84,31 +99,37 @@ bool Display::open(int width, int height) {
     EGLint major = 0, minor = 0, count = 0;
     EGLConfig config = nullptr;
     if (!eglInitialize(g_display, &major, &minor)) {
-        return fail("eglInitialize");
+        return give_up("eglInitialize");
     }
     if (!eglBindAPI(EGL_OPENGL_API)) {
-        return fail("eglBindAPI");
+        return give_up("eglBindAPI");
     }
-    if (!eglChooseConfig(g_display, kConfig, &config, 1, &count) || count != 1) {
-        return fail("eglChooseConfig");
+    bool chosen = !depth && eglChooseConfig(g_display, kConfigNoDepth, &config, 1, &count) && count == 1;
+    if (!chosen && !(eglChooseConfig(g_display, kConfig, &config, 1, &count) && count == 1)) {
+        return give_up("eglChooseConfig");
     }
+    EGLint depth_bits = -1, stencil_bits = -1;
+    eglGetConfigAttrib(g_display, config, EGL_DEPTH_SIZE, &depth_bits);
+    eglGetConfigAttrib(g_display, config, EGL_STENCIL_SIZE, &stencil_bits);
     // The PS5 backend owns the window: native handle 0.
     g_surface = eglCreateWindowSurface(g_display, config, (EGLNativeWindowType) 0, nullptr);
     if (g_surface == EGL_NO_SURFACE) {
-        return fail("eglCreateWindowSurface");
+        return give_up("eglCreateWindowSurface");
     }
     g_context = eglCreateContext(g_display, config, EGL_NO_CONTEXT, kContext);
     if (g_context == EGL_NO_CONTEXT) {
-        return fail("eglCreateContext");
+        return give_up("eglCreateContext");
     }
     if (!eglMakeCurrent(g_display, g_surface, g_surface, g_context)) {
-        return fail("eglMakeCurrent");
+        return give_up("eglMakeCurrent");
     }
-    eglQuerySurface(g_display, g_surface, EGL_WIDTH, &width_);
-    eglQuerySurface(g_display, g_surface, EGL_HEIGHT, &height_);
+    if (!eglQuerySurface(g_display, g_surface, EGL_WIDTH, &width_) ||
+        !eglQuerySurface(g_display, g_surface, EGL_HEIGHT, &height_)) {
+        return give_up("eglQuerySurface");
+    }
     eglSwapInterval(g_display, 1);
-    ps5lm::log_line("display: egl %d.%d, %dx%d, %s\n", major, minor, width_, height_,
-                    (const char *) glGetString(GL_RENDERER));
+    ps5lm::log_line("display: egl %d.%d, %dx%d, depth %d, stencil %d, %s\n", major, minor, width_, height_, depth_bits,
+                    stencil_bits, (const char *) glGetString(GL_RENDERER));
     return true;
 }
 
@@ -121,7 +142,7 @@ void Display::clear(float r, float g, float b) {
 void Display::present(hui::gfx::Renderer & renderer) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT);  // no depth or stencil to clear (PS5LM Lean)
     renderer.present(0, width_, height_);
 }
 

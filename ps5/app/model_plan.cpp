@@ -434,6 +434,12 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
     // at load, a 1280x1261 photo ran out at photo 23 (2026-11-11).
     p.reserve_gib = 0.75 + p.state_gib + (m.mmproj.empty() ? 0.0 : 0.25) + (wide || causal_vision ? 0.5 : 0.0) + ub_extra;
 
+    // Window layers hold the window and one ubatch, padded to 256, whatever
+    // the context (llama.cpp's iSWA cache without --swa-full).
+    const auto kv_at = [&](uint32_t ctx, const char * t) {
+        const uint32_t swa_tokens = std::min(ctx, (m.swa_window + p.ubatch + 255) / 256 * 256);
+        return (kv_bytes_per_token(m, t) * ctx + m.n_swa_layers * kv_bytes_per_layer_token(m, t) * swa_tokens) / kGiB;
+    };
     // The longest context first, and at each length the best cache that fits.
     static const uint32_t ctxs[]  = { 262144, 196608, 131072, 65536, 32768, 16384, 8192, 4096 };
     static const char *   types[] = { "f16", "q8_0", "q4_0" };
@@ -449,11 +455,7 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
             if (!kv_force && std::strcmp(t, "f16") == 0 && ctx > 8192) {
                 continue;
             }
-            // Window layers hold the window and one ubatch, padded to 256,
-            // whatever the context (llama.cpp's iSWA cache without --swa-full).
-            const uint32_t swa_tokens = std::min(ctx, (m.swa_window + p.ubatch + 255) / 256 * 256);
-            const double   kv         = (kv_bytes_per_token(m, t) * ctx +
-                                 m.n_swa_layers * kv_bytes_per_layer_token(m, t) * swa_tokens) / kGiB;
+            const double kv    = kv_at(ctx, t);
             const double total = p.weights_gib + kv + p.state_gib + p.reserve_gib;
             if (total <= budget_gib) {
                 p.fits = true;
@@ -471,7 +473,11 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
 
     char why[160];
     if (!p.fits) {
-        p.total_gib = p.weights_gib + p.state_gib + p.reserve_gib;
+        // PS5LM Lean: the least it needs, cache included: the shortest context
+        // with the smallest cache (the line left the cache out, so a model short
+        // by its cache read as if it fit).
+        p.total_gib = p.weights_gib + p.state_gib + p.reserve_gib +
+                      kv_at(std::min<uint32_t>(4096, std::max<uint32_t>(ctx_cap, 1)), kv_force ? kv_force : "q4_0");
         std::snprintf(why, sizeof(why), "needs %.1f GiB with a 4k context; %.1f GiB is free", p.total_gib, budget_gib);
         p.why = why;
         return p;

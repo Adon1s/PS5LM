@@ -82,9 +82,10 @@ ps5lm::Live sample(float seconds, bool generating) {
                 { "soc5", 60 }, { "soc6", 58 } };
     L.cpu_ghz     = 3.5f;
     L.drives = { { "Internal storage", "/data/PS5LM/models", 8, 825 }, { "M.2 drive", "/mnt/ext0/PS5LM/models", 1520, 1863 }, { "USB drive", "/mnt/usb0/PS5LM/models", 455, 477 } };
-    L.pool_gib    = 11.44;
-    L.free_gib    = 0.31;
-    L.heap_gib    = 0.76;
+    // PS5LM Lean: lean.12 on the console, screen on, Q2_K_XL ready (M, 2026-11-11).
+    L.pool_gib    = 12.1875;
+    L.free_gib    = 0.69;
+    L.heap_gib    = 0.88;
     L.cpus        = 13;
     L.uptime_s    = 754 + seconds;
     L.tokens      = 4182;
@@ -129,13 +130,17 @@ ps5lm::Live sample(float seconds, bool generating) {
     L.gen_tps  = generating ? 20.7f : 0.0f;
     L.gpu_busy = generating ? 0.94f : 0.02f;
     L.cpu_use  = generating ? 0.12f : 0.02f;
+    // PS5LM Lean: one model short by less than the screen holds (it fits with
+    // the screen off), one too big either way.
     const char * files[] = { "Qwen3.8-27B-UD-IQ1_S", "Qwen3.8-27B-UD-IQ2_S", "Qwen3.8-27B-UD-IQ2_XXS",
-                             "Qwen3.8-27B-UD-Q2_K_XL", "gpt-oss-20b-MXFP4" };
-    const char * plans[] = { "64k context, q8_0 cache: 8.9 of 11.0 GiB", "64k context, q8_0 cache: 11.0 of 11.0 GiB",
-                             "64k context, q8_0 cache: 9.9 of 11.0 GiB", "64k context, q4_0 cache: 11.3 of 11.4 GiB",
-                             "needs 11.6 GiB with a 4k context; 11.0 GiB is free" };
-    const double sizes[] = { 5.77, 7.80, 6.77, 9.15, 11.3 };
-    for (int i = 0; i < 5; ++i) {
+                             "Qwen3.8-27B-UD-Q2_K_XL", "Mistral-Small-3.2-24B-Instruct-Q3_K_M", "gpt-oss-20b-MXFP4" };
+    const char * plans[] = { "64k context, q8_0 cache: 8.9 of 11.8 GiB", "64k context, q8_0 cache: 11.0 of 11.8 GiB",
+                             "64k context, q8_0 cache: 9.9 of 11.8 GiB", "64k context, q4_0 cache: 11.3 of 11.8 GiB",
+                             "needs 12.0 GiB with a 4k context; 11.8 GiB is free",
+                             "needs 12.9 GiB with a 4k context; 11.8 GiB is free" };
+    const double sizes[] = { 5.77, 7.80, 6.77, 9.15, 10.7, 11.3 };
+    const double needs[] = { 0, 0, 0, 0, 12.0, 12.9 };
+    for (int i = 0; i < 6; ++i) {
         ps5lm::ModelRow m;
         m.file = std::string("/data/PS5LM/models/") + files[i] + ".gguf";
         m.drive = "Internal storage";
@@ -143,8 +148,10 @@ ps5lm::Live sample(float seconds, bool generating) {
         m.plan = plans[i];
         m.size_gib = sizes[i];
         m.fits = i < 4;
+        m.need_gib = needs[i];
+        m.fits_screen_off = i == 4;
         m.current = i == 3;
-        m.preset = i < 4 ? "Qwen 3.8" : "gpt-oss";
+        m.preset = i < 4 ? "Qwen 3.8" : i == 4 ? "Mistral" : "gpt-oss";
         L.models.push_back(m);
     }
     ps5lm::ModelRow usb;
@@ -205,6 +212,7 @@ ps5lm::Live sample(float seconds, bool generating) {
         L.state = ps5lm::ServerState::no_model;
         L.model_label.clear();
         L.decision.clear();
+        L.free_gib = 11.79;  // the screen and the app's own heap hold the rest
         L.requests = L.tokens = L.prompt_tokens = 0;
         for (auto & m : L.models) {
             m.current = false;
@@ -214,7 +222,7 @@ ps5lm::Live sample(float seconds, bool generating) {
         L.state = ps5lm::ServerState::loading;
         L.load_progress = g_loading;
         L.phase = g_phase;
-        L.free_gib = 11.03 - g_loading * (L.model_gib + L.kv_gib);
+        L.free_gib = 11.79 - g_loading * (L.model_gib + L.kv_gib);
         L.gen_tps = 0;
         L.gpu_busy = 0;
     }
@@ -257,6 +265,7 @@ int main(int argc, char ** argv) {
 
     hui::save::ensure_directory(out);
     ps5lm::Dashboard dash(fonts);
+    dash.set_screen({ 370.0 / 1024, true, 11.8 });  // PS5LM Lean: lean.12's measured screen, its budget with it on
     ps5lm::Settings settings;
     settings.default_model = "/data/PS5LM/models/Qwen3.8-27B-UD-Q2_K_XL.gguf";
     dash.set_settings(settings);
@@ -279,10 +288,10 @@ int main(int argc, char ** argv) {
         mv.repos.push_back(r);
     }
     mv.open = 0;
-    const char * fnames[] = { "Qwen3.8-27B-UD-IQ2_XXS.gguf", "Qwen3.8-27B-UD-Q2_K_XL.gguf", "Qwen3.8-27B-Q3_K_M.gguf", "Qwen3.8-27B-Q4_K_M.gguf" };
-    const double fsz[] = { 6.8, 9.2, 12.6, 15.4 };
-    const int ffits[] = { 1, 1, 0, 0 };
-    const char * fplans[] = { "64k context, q8_0 cache: 9.9 of 11.0 GiB", "32k context, q4_0 cache: 10.8 of 11.0 GiB",
+    const char * fnames[] = { "Qwen3.8-27B-UD-IQ2_XXS.gguf", "Qwen3.8-27B-UD-IQ2_M.gguf", "Qwen3.8-27B-Q3_K_M.gguf", "Qwen3.8-27B-Q4_K_M.gguf" };
+    const double fsz[] = { 6.8, 9.9, 12.6, 15.4 };
+    const int ffits[] = { 1, 0, 0, 0 };
+    const char * fplans[] = { "64k context, q8_0 cache: 9.9 of 11.8 GiB", "needs 12.0 GiB with a 4k context; 11.8 GiB is free",
                               "too big: the weights alone need more than is free", "too big: the weights alone need more than is free" };
     for (int i = 0; i < 4; ++i) {
         ps5lm::MarketFile f;
@@ -290,6 +299,8 @@ int main(int argc, char ** argv) {
         f.bytes = (uint64_t) (fsz[i] * 1073741824.0);
         f.fits = ffits[i];
         f.plan = fplans[i];
+        f.fits_screen_off = i == 1;  // PS5LM Lean
+        f.need_gib = i == 1 ? 12.0 : 0;
         mv.repos[0].files.push_back(f);
     }
     {
@@ -439,6 +450,11 @@ int main(int argc, char ** argv) {
     shot("14-console-hour");
     step(40, press(A::page_next), false);
     shot("15-settings");
+    // PS5LM Lean: Screen and memory comes first; its rows, then on to Startup.
+    step(30, press(A::confirm), false);
+    shot("15-settings-screen-rows");
+    step(20, press(A::back), false);
+    step(20, nav(D::down), false);
     step(20, press(A::confirm), false);
     step(30, nav(D::down), false);
     shot("16-settings-row");
@@ -495,5 +511,22 @@ int main(int argc, char ** argv) {
     dash.set_busy("Loading Qwen3.8 27B", "Restarting with the whole memory for it, about 90 seconds");
     step(30, {}, false);
     shot("21-busy");
+    dash.set_busy("");
+    step(30, {}, false);
+
+    // PS5LM Lean: the screen-off question from Home (Options), its countdown,
+    // and a model that fits only with the screen off.
+    step(30, press(A::menu), false);
+    shot("22-screen-question");
+    step(20, press(A::confirm), false);
+    step(60, {}, false);
+    shot("23-screen-countdown");
+    step(20, press(A::back), false);
+    step(30, press(A::confirm), false);  // Home's Cross: the library, on the running model
+    step(30, nav(D::down), false);
+    shot("24-models-screen-off");
+    step(30, press(A::confirm), false);
+    shot("25-models-load-question");
+    step(20, press(A::back), false);
     return ok ? 0 : 1;
 }

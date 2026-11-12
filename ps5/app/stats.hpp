@@ -53,6 +53,10 @@ struct ModelRow {
     bool        fits     = false;
     bool        current  = false;
     std::string drive;  // the Drive's name it is on; every drive loads alike
+    // PS5LM Lean: a model that does not fit: the least it needs (4k context,
+    // the smallest cache), and whether it fits once the screen's memory is free.
+    double      need_gib = 0;
+    bool        fits_screen_off = false;
 };
 
 struct Live {

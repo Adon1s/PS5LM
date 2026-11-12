@@ -166,6 +166,10 @@ from a drive instead of holding them in memory (Qwen3.8-Flash-Next on the roadma
 | `memory each` / `memory off` | PS5LM Lean: a `memory after a request` line after every request, and `memory after the trim` after its heap trim; or no more |
 | `trim` | PS5LM Lean: trims the heap now, between a `memory before trim` and a `memory after trim` line |
 | `trim on` / `trim off` | PS5LM Lean: the heap trim 0.25 s after each request and every 10 s (on by default with `patches/sdk`) |
+| `screen off` / `on` | PS5LM Lean: restart without the screen (`screen.txt` = `off`) or with it; the model loads again |
+| `screen off-now` | PS5LM Lean: close the screen in place, model kept, not remembered (a test) |
+| `screen on-now` | PS5LM Lean (lean.13): open the screen again in place, model kept, when the pool has a 322 MiB block and the screen's cost plus 256 MiB free in all; else the restart, as `on` |
+| `press options` | PS5LM Lean (lean.13): the Options button, which asks to turn the screen off |
 
 PS5LM Lean's memory line ends with exact figures, for example `[MiB: largest 1843, all free 1864 in 14 blocks, heap
 973 in 412 segments, in use 920, walk 2.1 ms, trim 0.4 ms, arenas 8, libc fallbacks 0, requests 12, in flight 0]`:
@@ -178,6 +182,12 @@ With a projector and `--image-max-tokens`, PS5LM Lean sends its own server one i
 ready (`vision warm-up: ...` and `memory after the warm-up` in `app.log`), so the vision encoder's GPU buffers are
 allocated once at their largest instead of growing photo by photo. `off` in `/data/PS5LM/warmup.txt` skips it.
 
+At each start with the screen on, PS5LM Lean (lean.13) measures what the screen took (the largest free block before
+the display opens and after its first frame), logs `the screen holds N MiB of the pool`, and keeps N in
+`/data/PS5LM/screen-cost.txt`, so a start without the screen can still say what it saves. `memory display open` and
+`memory renderer and fonts ready` lines split that cost. The screen's surface has no depth or stencil buffer (the
+dashboard uses neither); `depth` in `/data/PS5LM/display.txt` asks for them as before, to measure the difference.
+
 Point `bench-read` at a model of several GiB on the drive in question (internal storage, the M.2
 drive or USB), so the cache holds little of it; the `O_DIRECT` lines are the drive itself.
 
@@ -187,6 +197,6 @@ Unloading a model in the running app leaves part of its GPU memory held: with Qw
 
 ### The dashboard on the console
 
-ps5-homebrew-ui draws through ps5-opengl in the same title as RADV: the GL stack is linked as one object with only its GL/EGL API global (4,399 symbol names collide with RADV's Mesa otherwise), `sceAgcInit` runs once for both drivers (`--wrap`), and the GL runtime's thread-local initialiser `_ZTH23_mesa_glapi_tls_Context` is an empty function, as ProsperoAI has it. The screen costs about 0.35 GiB of the pool (11.38 to 11.03 GiB free). The app can be driven from a PC without a controller: `scripts/ps5lm-app.sh close|deploy|launch|screenshot|load|unload`.
+ps5-homebrew-ui draws through ps5-opengl in the same title as RADV: the GL stack is linked as one object with only its GL/EGL API global (4,399 symbol names collide with RADV's Mesa otherwise), `sceAgcInit` runs once for both drivers (`--wrap`), and the GL runtime's thread-local initialiser `_ZTH23_mesa_glapi_tls_Context` is an empty function, as ProsperoAI has it. The screen costs about 0.35 GiB of the pool (11.38 to 11.03 GiB free; 370 MiB on PS5LM Lean lean.12, 320 MiB of it the GL port's render pool: two 32 MiB frame buffers sized for 4K and a 256 MiB arena, fixed when the library is built). The app can be driven from a PC without a controller: `scripts/ps5lm-app.sh close|deploy|launch|screenshot|load|unload`.
 
 ShadowMountPlus registers a title once and copies its icon and backgrounds then; replacing them later needs a re-registration. Uninstalling to force one hit "Register failed: TitleDir bridge unavailable" after ShadowMountPlus had logged `stale cave bridge detached`; reloading ShadowMountPlus fixed it.

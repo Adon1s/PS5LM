@@ -388,6 +388,15 @@ void log_memory(const char * when, bool devices = true, double trim_ms = -1) {
     ps5lm::log_line("%s\n", line.c_str());
 }
 
+// The largest free block of the direct pool, as the memory line's "largest":
+// what one big allocation (a model's buffer, the screen's render pool) can get.
+size_t largest_free_bytes() {
+    int64_t at = 0;
+    size_t  avail = 0;
+    sceKernelAvailableDirectMemorySize(0, sceKernelGetDirectMemorySize(), 2 * 1024 * 1024, &at, &avail);
+    return avail;
+}
+
 // Rest mode ends the title, and on a jailbroken console the controllers do not
 // connect again until a restart. Requests from the network are not controller
 // input, so the system put a serving console to rest an hour after the last
@@ -685,6 +694,7 @@ void * run_server(void *) {
 
 struct Models {
     double                 budget_gib = 0;   // GPU memory free before any model
+    double                 screen_gib = 0;   // PS5LM Lean: what the screen holds while it is on, else 0
     std::vector<ModelRow>  rows;
     std::string            running;          // path of the model llama-server has
     pthread_t              server{};
@@ -694,7 +704,7 @@ struct Models {
     const char * kv_force() const { return settings.kv_type == "auto" ? nullptr : settings.kv_type.c_str(); }
 
     void scan(StatsCollector & stats) {
-        rows = plan_rows(settings, budget_gib, running);
+        rows = plan_rows(settings, budget_gib, screen_gib, running);
         publish(stats);
     }
 
@@ -713,8 +723,8 @@ struct Models {
             return;
         }
         scan_state = 1;
-        std::thread([this, s = settings, b = budget_gib, r = running] {
-            std::vector<ModelRow> out = plan_rows(s, b, r);
+        std::thread([this, s = settings, b = budget_gib, g = screen_gib, r = running] {
+            std::vector<ModelRow> out = plan_rows(s, b, g, r);
             std::lock_guard<std::mutex> lock(scan_mutex);
             scanned = std::move(out);
             scan_state = 2;
@@ -739,7 +749,8 @@ struct Models {
         return scan_state != 0;
     }
 
-    static std::vector<ModelRow> plan_rows(const Settings & settings, double budget_gib, const std::string & running) {
+    static std::vector<ModelRow> plan_rows(const Settings & settings, double budget_gib, double screen_gib,
+                                           const std::string & running) {
         std::vector<ModelRow> rows;
         const char * kv = settings.kv_type == "auto" ? nullptr : settings.kv_type.c_str();
         // Also every folder the downloads can go to: the M.2 slot or a USB drive is
@@ -774,8 +785,12 @@ struct Models {
             row.preset = pre ? pre->label : "";
             row.decision = m.decision;
             row.current = path == running;
+            // PS5LM Lean: too big with the screen on; with its memory free?
+            row.need_gib = p.fits ? 0 : p.total_gib;
+            row.fits_screen_off = !p.fits && screen_gib > 0 && plan_model(m, budget_gib + screen_gib, settings.ctx_cap, kv).fits;
             rows.push_back(row);
-            ps5lm::log_line("model %s (%s): %s\n", m.file_name.c_str(), m.arch.c_str(), p.why.c_str());
+            ps5lm::log_line("model %s (%s): %s%s\n", m.file_name.c_str(), m.arch.c_str(), p.why.c_str(),
+                            row.fits_screen_off ? " (fits with the screen off)" : "");
         }
         return rows;
     }
@@ -875,7 +890,9 @@ pthread_t start_thread(std::function<void()> & fn) {
     return t;
 }
 
-bool load_font(hui::gfx::Renderer & renderer, const char * name, hui::gfx::Font * font, hui::ui::FontRef * ref) {
+// A font file into memory, once (PS5LM Lean: its texture is made apart, at
+// every opening of the screen; the font keeps its atlas for that).
+bool read_font(const char * name, hui::gfx::Font * font, hui::ui::FontRef * ref) {
     std::string data;
     const std::string path = sandbox_path(kAssets) + "/fonts/" + name;
     if (!hui::save::read_file(path, &data) || !font->load(data)) {
@@ -883,8 +900,12 @@ bool load_font(hui::gfx::Renderer & renderer, const char * name, hui::gfx::Font 
         return false;
     }
     ref->font = font;
-    ref->texture = renderer.batch().create_font_texture(*font);
     return true;
+}
+
+bool upload_font(hui::gfx::Renderer & renderer, hui::ui::FontRef * ref) {
+    ref->texture = renderer.batch().create_font_texture(*ref->font);
+    return ref->texture != 0;
 }
 
 }  // namespace
@@ -960,31 +981,76 @@ int main(int, char **) {
                                       : "the SDK's own, no trim");
 
     // PS5LM Lean: "off" in screen.txt leaves the screen closed, for a console
-    // that only serves. The screen holds about 0.42 GiB of the pool (the GL
-    // port's 320 MiB render pool, 4K frame buffers, fonts); without it that
-    // memory goes to the model. The TV shows nothing from the app; the
-    // system's notifications still say when the model is ready or failed, and
-    // the PC's request files (load, unload, memory, quit) still work.
+    // that only serves. The screen holds about 0.36 GiB of the pool (the GL
+    // port's 320 MiB render pool: two 4K-sized frame buffers and a 256 MiB
+    // arena; fonts and the renderer); without it that memory goes to the model.
+    // The TV keeps the system's picture of the app; notifications say when the
+    // model is ready or failed, and the PC's request files still work.
     const std::vector<std::string> screen_txt = read_lines(data_path("screen.txt"));
     const bool screen_on = screen_txt.empty() || screen_txt[0] != "off";
 
-    // The screen first: it takes from the same memory as the model.
-    Display display;
-    if (!screen_on) {
-        ps5lm::log_line("screen off (screen.txt): no display, no dashboard\n");
-    } else if (!display.open(1920, 1080)) {
-        ps5lm::log_line("no display\n");
+    // What the screen costs, measured at each start with the screen on (the
+    // largest free block before the display opens and after its first frame)
+    // and kept in screen-cost.txt, so a start without the screen can still say
+    // what it saves. Until a console has measured it, about 360 MiB.
+    double screen_cost_gib = 360.0 / 1024;
+    bool   screen_cost_measured = false;
+    if (const auto c = read_lines(data_path("screen-cost.txt")); !c.empty()) {
+        const long mib = std::strtol(c[0].c_str(), nullptr, 10);
+        if (mib >= 64 && mib <= 2048) {
+            screen_cost_gib = mib / 1024.0;
+            screen_cost_measured = true;
+        }
     }
+
+    // The screen first: it takes from the same memory as the model. It opens
+    // and closes through these two (the font files are read once; their
+    // textures are made again at each open).
+    Display display;
     hui::gfx::Renderer renderer;
     hui::gfx::Font regular, semibold, headline, mono;
     hui::ui::Fonts fonts;
-    const bool ui_ok = screen_on && renderer.init() && load_font(renderer, "manrope-500.huifont", &regular, &fonts.regular) &&
-                       load_font(renderer, "manrope-600.huifont", &semibold, &fonts.semibold) &&
-                       load_font(renderer, "manrope-200.huifont", &headline, &fonts.display) &&
-                       load_font(renderer, "dejavu-sans-mono.huifont", &mono, &fonts.mono);
-    fonts.pixel = fonts.mono;
-    fonts.hand = fonts.regular;
-    ps5lm::log_line("dashboard %s\n", ui_ok ? "ready" : screen_on ? "failed" : "off");
+    bool fonts_read = false, screen_up = false, splash_hidden = false;
+    // "depth" in display.txt gives the screen the depth and stencil buffers it
+    // had before lean.13, to measure what leaving them out saves.
+    const std::vector<std::string> display_txt = read_lines(data_path("display.txt"));
+    const bool display_depth = !display_txt.empty() && display_txt[0] == "depth";
+    const auto screen_open = [&]() -> bool {
+        if (!display.open(1920, 1080, display_depth)) {
+            return false;
+        }
+        log_memory("display open", false);
+        if (!fonts_read) {
+            fonts_read = read_font("manrope-500.huifont", &regular, &fonts.regular) &&
+                         read_font("manrope-600.huifont", &semibold, &fonts.semibold) &&
+                         read_font("manrope-200.huifont", &headline, &fonts.display) &&
+                         read_font("dejavu-sans-mono.huifont", &mono, &fonts.mono);
+        }
+        const bool ok = fonts_read && renderer.init() && upload_font(renderer, &fonts.regular) &&
+                        upload_font(renderer, &fonts.semibold) && upload_font(renderer, &fonts.display) &&
+                        upload_font(renderer, &fonts.mono);
+        if (!ok) {
+            renderer.release();
+            display.close();
+            return false;
+        }
+        fonts.pixel = fonts.mono;
+        fonts.hand = fonts.regular;
+        log_memory("renderer and fonts ready", false);
+        return true;
+    };
+    const auto screen_close = [&] {
+        renderer.release();
+        display.close();
+        screen_up = false;
+    };
+    const size_t before_screen = largest_free_bytes();
+    if (!screen_on) {
+        ps5lm::log_line("screen off (screen.txt): no display, no dashboard\n");
+    } else if (!(screen_up = screen_open())) {
+        ps5lm::log_line("no display\n");
+    }
+    ps5lm::log_line("dashboard %s\n", screen_up ? "ready" : screen_on ? "failed" : "off");
 
     Dashboard dash(fonts);
     DashboardFrame frame;
@@ -1005,17 +1071,36 @@ int main(int, char **) {
         display.present(renderer);
     };
     // The splash at once, so a restart for a model is never a black screen.
-    if (ui_ok) {
+    if (screen_up) {
         dash.set_busy("Starting", "Opening the GPU and reading the models");
         render();
         display.swap();
+        const size_t after = largest_free_bytes();
+        if (before_screen > after) {
+            const long mib = (long) ((before_screen - after) >> 20);
+            screen_cost_gib = mib / 1024.0;
+            screen_cost_measured = true;
+            std::ofstream(data_path("screen-cost.txt")) << mib << "\n";
+            ps5lm::log_line("the screen holds %ld MiB of the pool (largest free block %zu -> %zu MiB)\n", mib,
+                            before_screen >> 20, after >> 20);
+        }
     }
+    dash.set_screen({ screen_cost_gib, screen_cost_measured, 0 });
     // Without a screen the system's splash stays up, so the TV shows the app's
     // picture rather than black (as cobanov/PS5LM#73 does for fleet workers).
-    if (screen_on) {
+    // PS5LM Lean: a screen that failed to open keeps the splash too.
+    char screen_note[256];
+    std::snprintf(screen_note, sizeof(screen_note),
+                  "PS5LM Lean: screen off, saving %.0f MB for the model. The server answers on port %d. "
+                  "Hold Triangle for 2 seconds to turn the screen on.",
+                  std::round(screen_cost_gib * 1024.0 / 10.0) * 10.0, kPort);
+    if (screen_up) {
         sceSystemServiceHideSplashScreen();
+        splash_hidden = true;
+    } else if (screen_on) {
+        notify("PS5LM Lean: the screen did not open. The server answers on port 8081; app.log says why.");
     } else {
-        notify("PS5LM Lean: screen off (screen.txt). The server comes up on port 8081.");
+        notify(screen_note);
     }
 
     // Fleet is a mutually exclusive startup mode, not another local model.
@@ -1067,7 +1152,7 @@ int main(int, char **) {
                 failed ? worker_error : fleet.endpoint + " - no authentication; isolated LAN only");
             quiet.clear();
             dash.update(hui::InputFrame{}, 1.0f / 60.0f, quiet);
-            if (ui_ok) {
+            if (screen_up) {
                 render();
                 if (n % 60 == 45 && !take_request_file("/data/PS5LM/screenshot").empty()) {
                     save_screen("/data/PS5LM/screen.bmp", display.width(), display.height());
@@ -1088,6 +1173,7 @@ int main(int, char **) {
     set_activity_sink(&stats);  // llama-server's request hooks (patches/0007) report here
     Models models;
     models.settings = load_settings(g_files.settings.c_str());
+    models.screen_gib = screen_up ? screen_cost_gib : 0;  // PS5LM Lean: which models fit with it off
     // Without full storage, downloads go where the app can write.
     if (app_storage() && models.settings.download_dir.rfind(kFullRoot, 0) == 0) {
         models.settings.download_dir = g_files.models;
@@ -1196,12 +1282,13 @@ int main(int, char **) {
         hui::ui::Feedback quiet;  // no sounds yet: the mixer starts after
         const int64_t start = hui::sys::monotonic_us();
         int64_t at = start;
-        while (ui_ok && !booted) {
+        while (screen_up && !booted) {
             const int64_t now = hui::sys::monotonic_us();
             if (now - start > 1200000) {
                 dash.set_busy("");
             }
             dash.set_live(stats.snapshot());
+            dash.set_screen({ screen_cost_gib, screen_cost_measured, models.budget_gib });
             quiet.clear();
             dash.update(hui::InputFrame{}, std::min(0.05f, (float) (now - at) / 1e6f), quiet);
             at = now;
@@ -1211,19 +1298,29 @@ int main(int, char **) {
     }
     pthread_join(booting, nullptr);
 
-    // Input and sound, as ps5-homebrew-ui's own app does.
+    // Input and sound, as ps5-homebrew-ui's own app does. PS5LM Lean: the
+    // sound only once there is a screen (the pad runs either way: it wakes it).
     hui::ps5::Pad pad;
     pad.open();
     hui::InputTracker tracker;
     hui::audio::Mixer mixer;
     hui::ps5::AudioOut audio_out;
-    audio_out.start(mixer);
     hui::audio::SoundBank sounds;
-    sounds.load(sandbox_path(kAssets) + "/audio/sfx");
+    bool sound_started = false;
+    const auto start_sound = [&] {
+        if (!sound_started) {
+            sound_started = true;
+            audio_out.start(mixer);
+            sounds.load(sandbox_path(kAssets) + "/audio/sfx");
+        }
+    };
+    if (screen_up) {
+        start_sound();
+    }
 
     dash.set_busy("");
     Market    market;
-    market.start(models.budget_gib);
+    market.start(models.budget_gib, models.screen_gib);
     int  saved_seen = 0;  // downloads finished, as last seen
     dash.set_settings(models.settings);
     dash.set_storage(!app_storage(), app_storage_size() / 1073741824.0, app_storage() && storage_choice().empty());
@@ -1244,10 +1341,10 @@ int main(int, char **) {
     bool was_serving = false;
     bool rescanning = false;
     uint64_t restart_at = 0;  // the frame to stop the model and restart on, or 0
-    // PS5LM Lean: the screen closed in place (Settings > Screen > now), and a
-    // held Triangle that brings the screen back when there is none.
-    bool     screen_closed = false;
-    uint64_t closed_check_at = 0, wake_since = 0;
+    // PS5LM Lean: a held Triangle brings the screen back when there is none;
+    // any other button then gets a reminder of that, at most every 20 s.
+    uint64_t closed_check_at = 0;
+    int64_t  wake_since = 0, hint_at = 0, input_mute_until = 0;
     // PS5LM Lean: the heap trim (heap_info.hpp), on by default where the heap
     // can; the PC's request file "trim" turns it off and on, "memory each" adds
     // a memory line after every request and after its trim.
@@ -1331,6 +1428,7 @@ int main(int, char **) {
             models.publish(stats);
         }
         dash.set_live(live);
+        dash.set_screen({ screen_cost_gib, screen_cost_measured, models.budget_gib });
         feedback.clear();
         // A button pressed from the PC (scripts/ps5lm-app.sh press r1), for
         // testing the screens without a controller in hand.
@@ -1354,6 +1452,7 @@ int main(int, char **) {
                 { "r1", hui::Action::page_next, hui::Direction::none },
                 { "l2", hui::Action::jump_prev, hui::Direction::none },
                 { "r2", hui::Action::jump_next, hui::Direction::none },
+                { "options", hui::Action::menu, hui::Direction::none },  // PS5LM Lean
             };
             for (const auto & k : keys) {
                 if (key == k.name) {
@@ -1363,8 +1462,8 @@ int main(int, char **) {
                 }
             }
         }
-        if (screen_on && !screen_closed) {  // without a screen, no dashboard to steer
-            dash.update(in, dt, feedback);
+        if (screen_up) {  // without a screen, no dashboard to steer
+            dash.update(now < input_mute_until ? hui::InputFrame{} : in, dt, feedback);
             for (const auto & cue : feedback.cues) {
                 if (!models.settings.sounds) {
                     break;
@@ -1406,7 +1505,7 @@ int main(int, char **) {
             }
             dash.set_market(std::move(mv));
         }
-        if (dash.wants_logs() && n % 60 == 0) {
+        if (screen_up && dash.wants_logs() && n % 60 == 0) {
             dash.set_logs(tail_lines(g_files.log), tail_lines(g_files.llama_log));
         }
 
@@ -1430,23 +1529,43 @@ int main(int, char **) {
         }
 
         Dashboard::Request req = dash.take_request();
-        // PS5LM Lean: the screen off from Settings > Screen, or from the PC (a
-        // request file "screen" holding off, off-now or on).
-        bool wake = false;
+        bool load_without_screen = false;
+        // PS5LM Lean: the screen off from the dashboard (after its question and
+        // countdown), or from the PC: a request file "screen" holding off (a
+        // restart without it), off-now (closed in place, not remembered), on (a
+        // restart with it) or on-now (opened again in place, without a restart).
+        bool wake = false, open_now = false;
         if (n % 60 == 40 && req.kind == Dashboard::Request::none) {
             const std::string s = take_request_file(data_path("screen"));
+            if (!s.empty()) {
+                ps5lm::log_line("screen request: %s\n", s.c_str());
+            }
             if (s == "off") {
                 req = { Dashboard::Request::screen_off_restart, "" };
             } else if (s == "off-now") {
                 req = { Dashboard::Request::screen_off_now, "" };
             } else if (s == "on") {
                 wake = true;
+            } else if (s == "on-now") {
+                open_now = true;
             }
         }
-        if (!screen_on || screen_closed) {
+        if (!screen_up) {
             // Triangle held for 2 seconds: the screen comes back by a restart.
-            wake_since = (input.held & hui::action_bit(hui::Action::north)) ? (wake_since ? wake_since : n) : 0;
-            wake = wake || (wake_since != 0 && n - wake_since >= 120);
+            // Timed in microseconds: without a screen the loop runs slower than 60 Hz.
+            const bool north = input.held & hui::action_bit(hui::Action::north);
+            const bool early = (input.released & hui::action_bit(hui::Action::north)) && wake_since != 0 &&
+                               now - wake_since < 2000000;
+            wake_since = north ? (wake_since ? wake_since : now) : 0;
+            wake = wake || (wake_since != 0 && now - wake_since >= 2000000);
+            // Any other button, or Triangle let go too soon: how to bring the
+            // screen back, as a notification, at most every 20 s.
+            if (((in.pressed & ~hui::action_bit(hui::Action::north)) != 0 || early) &&
+                (hint_at == 0 || now - hint_at >= 20000000)) {
+                hint_at = now;
+                notify(screen_note);
+                ps5lm::log_line("screen off: a button was pressed, the reminder sent\n");
+            }
         }
         const auto restart_with_screen = [&](const char * state) {
             std::ofstream(data_path("screen.txt")) << state << "\n";
@@ -1456,23 +1575,68 @@ int main(int, char **) {
             ps5lm::log_line("screen %s: restarting%s\n", state,
                             models.running.empty() ? "" : (" with " + base_name(models.running)).c_str());
         };
-        if (wake && restart_at == 0 && (!screen_on || screen_closed)) {
+        if (wake && restart_at == 0 && !screen_up) {
             restart_with_screen("on");
             notify("PS5LM Lean: bringing the screen back; the model loads again");
             restart_at = n + 1;
+        } else if (open_now && restart_at == 0 && !screen_up) {
+            // Opened again in place, when the pool has the room: one block for
+            // the GL port's render pool (320 MiB) and the screen's whole cost
+            // with 256 MiB to spare for the model. Else the restart, as a wake.
+            size_t all = 0;
+            int    blocks = 0;
+            bool   capped = false;
+            free_blocks(0, sceKernelGetDirectMemorySize(), all, blocks, capped);
+            const size_t largest = largest_free_bytes();
+            const size_t need = (size_t) (screen_cost_gib * 1073741824.0) + (256ull << 20);
+            const bool room = largest >= (322ull << 20) && all >= need && live.state != ServerState::loading;
+            ps5lm::log_line("screen on in place: largest free %zu MiB, all free %zu MiB in %d blocks: %s\n", largest >> 20,
+                            all >> 20, blocks, room ? "opening it" : "too little room, restarting with it");
+            const int64_t t0 = hui::sys::monotonic_us();
+            if (room && screen_open()) {
+                screen_up = true;
+                std::ofstream(data_path("screen.txt")) << "on\n";
+                start_sound();
+                if (!splash_hidden) {
+                    sceSystemServiceHideSplashScreen();
+                    splash_hidden = true;
+                }
+                hui::ui::Feedback quiet;  // the cues of a model readied or a download saved meanwhile
+                dash.update(hui::InputFrame{}, 0.0f, quiet);
+                input_mute_until = hui::sys::monotonic_us() + 500000;  // presses made while it opened
+                ps5lm::log_line("screen on in place in %.0f ms\n", (hui::sys::monotonic_us() - t0) / 1000.0);
+                log_memory("screen open again", false);
+            } else {
+                restart_with_screen("on");
+                notify("PS5LM Lean: bringing the screen back; the model loads again");
+                restart_at = n + 1;
+            }
         } else if (req.kind == Dashboard::Request::screen_off_restart && restart_at == 0) {
             restart_with_screen("off");
             dash.set_busy("Turning the screen off",
-                          "The app restarts and loads the model again. Hold Triangle for 2 seconds to bring the screen back.");
+                          "The model loads again with the screen's memory. Hold Triangle for 2 seconds to bring the screen back.");
             restart_at = n + 3;  // three frames with the busy screen on the TV first
-        } else if (req.kind == Dashboard::Request::screen_off_now && screen_on && !screen_closed) {
+        } else if ((req.kind == Dashboard::Request::screen_off || req.kind == Dashboard::Request::screen_off_now) &&
+                   screen_up) {
+            // In place: the model keeps running. From the dashboard it is
+            // remembered (the next start has no screen either); the PC's
+            // off-now is a test and is not.
             log_memory("before the screen closes");
-            renderer.release();
-            display.close();
-            screen_closed = true;
+            if (req.kind == Dashboard::Request::screen_off) {
+                std::ofstream(data_path("screen.txt")) << "off\n";
+            }
+            screen_close();
             closed_check_at = n + 120;  // and again 2 s later, in case the port frees late
             log_memory("screen closed");
-            notify("PS5LM Lean: screen off. Hold Triangle for 2 seconds to bring it back.");
+            notify(screen_note);
+            hint_at = now;
+        } else if (req.kind == Dashboard::Request::load_screen_off) {
+            // A model that needs the screen's memory: the restart for it starts
+            // without the screen, and stays so.
+            std::ofstream(data_path("screen.txt")) << "off\n";
+            ps5lm::log_line("loading %s without the screen\n", req.path.c_str());
+            req.kind = Dashboard::Request::load;
+            load_without_screen = true;
         }
         if (closed_check_at != 0 && n >= closed_check_at) {
             log_memory("screen closed, 2 s later");
@@ -1645,7 +1809,10 @@ int main(int, char **) {
             }
             ps5lm::log_line("restarting for %s\n", req.kind == Dashboard::Request::load ? req.path.c_str() : "no model");
             const bool loaded = !models.running.empty();
-            if (req.kind == Dashboard::Request::load) {
+            if (load_without_screen) {
+                dash.set_busy("Loading " + base_name(req.path) + " without the screen",
+                              "The app restarts without the screen. Hold Triangle for 2 seconds to bring it back.");
+            } else if (req.kind == Dashboard::Request::load) {
                 dash.set_busy(loaded ? "Switching models" : "Loading " + base_name(req.path),
                               loaded ? "Unloading " + base_name(models.running) + ", then the app restarts with " + base_name(req.path)
                                      : "The app restarts to give the model the whole memory");
@@ -1655,14 +1822,12 @@ int main(int, char **) {
             restart_at = n + 3;  // three frames with the busy screen on the TV first
         }
 
-        if (ui_ok && !screen_closed) {
+        if (screen_up) {
             render();
             if (n % 60 == 45 && !take_request_file(data_path("screenshot")).empty()) {
                 const bool ok = save_screen(data_path("screen.bmp").c_str(), display.width(), display.height());
                 ps5lm::log_line("screenshot %s\n", ok ? "saved" : "failed");
             }
-        }
-        if (screen_on && !screen_closed) {
             display.swap();  // paces the loop at the TV's 60 Hz
         } else {
             sceKernelUsleep(16667);

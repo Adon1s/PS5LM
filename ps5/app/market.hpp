@@ -22,6 +22,8 @@ struct MarketFile {
     std::string plan;            // the planner's line, once its header was read
     int         fits  = -1;      // 1 fits, 0 too big, -1 not planned yet, -2 could not tell
     bool        checking = false;  // its header is being read
+    bool        fits_screen_off = false;  // PS5LM Lean: too big now, fits once the screen's memory is free
+    double      need_gib = 0;              // ... and the least it needs, when too big
 };
 
 struct MarketRepo {
@@ -65,7 +67,9 @@ struct MarketView {
 class Market {
   public:
     // budget_gib: GPU memory free before any model, for the fit column.
-    void start(double budget_gib);
+    // screen_gib (PS5LM Lean): what the screen holds while it is on, so a file
+    // too big now can say it fits with the screen off; 0 without a screen.
+    void start(double budget_gib, double screen_gib = 0);
     MarketView snapshot();
 
     void search(const std::string & query);
@@ -91,6 +95,7 @@ class Market {
     std::mutex mutex_;
     MarketView view_;
     double     budget_gib_ = 0;
+    double     screen_gib_ = 0;
     std::atomic<bool> browsing_{ false };
     struct PlanJob { std::string repo, file; uint64_t bytes = 0; };
     std::vector<PlanJob> plans_;           // fit checks asked for, newest last

@@ -81,7 +81,7 @@ constexpr int          kMarketChipCount = 7;
 // ---- Settings -------------------------------------------------------------------
 
 enum class Setting : int { auto_load, default_model, ctx_cap, kv_type, sounds, tools, introspect, scratch_limit, clear_scratch, download_dir,
-                           storage, debug_report, report_kernel_log, screen_off_restart, screen_off_now };
+                           storage, debug_report, report_kernel_log, screen_off, screen_reload };
 
 struct SettingRow {
     Setting      id;
@@ -96,6 +96,15 @@ struct SettingCategory {
 };
 
 constexpr SettingCategory kCategories[] = {
+    // PS5LM Lean: the screen holds memory the model could use; first, so it is
+    // found. The help lines are written with this console's measured figure
+    // (draw_settings); these are for a console that has not measured it yet.
+    { "Screen and memory",
+      { { Setting::screen_off, "Turn the screen off",
+          "Frees about 360 MB for the model. Hold Triangle for 2 seconds to bring it back" },
+        { Setting::screen_reload, "Turn off and reload the model",
+          "The freed memory in one piece, for a model that needs all of it. About 20 seconds" } },
+      2 },
     { "Startup",
       { { Setting::auto_load, "Load a model at launch", "Off: the app opens and waits for a choice" },
         { Setting::default_model, "Model to load", "One of the models on this PS5" } },
@@ -121,13 +130,6 @@ constexpr SettingCategory kCategories[] = {
     { "Debug report",
       { { Setting::debug_report, "Create a debug report", "One file to attach to a GitHub issue, with no keys or tokens in it" },
         { Setting::report_kernel_log, "Include the kernel log", "Its last 1 MiB, read from klogsrv; off unless you switch it on" } },
-      2 },
-    // PS5LM Lean: the screen holds about 0.35 GiB the model could use.
-    { "Screen",
-      { { Setting::screen_off_restart, "Turn the screen off",
-          "Restarts without it; the model loads again with ~0.35 GiB more. Hold Triangle 2 s to bring it back" },
-        { Setting::screen_off_now, "Turn the screen off now (test)",
-          "Closes it, no restart; app.log says what memory came back. Hold Triangle 2 s to bring it back" } },
       2 },
     { "Diagnostics", {}, 0 },
 };
@@ -208,6 +210,15 @@ void split_name(const std::string & label, std::string * name, std::string * bui
     if (name->empty()) {
         *name = label;
     }
+}
+
+// "/data/PS5LM/models/Qwen3.8-27B-UD-Q2_K_XL.gguf" -> "Qwen3.8-27B-UD-Q2_K_XL".
+std::string base_label(const std::string & path) {
+    std::string s = path.substr(path.find_last_of('/') + 1);
+    if (s.size() > 5 && s.compare(s.size() - 5, 5, ".gguf") == 0) {
+        s.resize(s.size() - 5);
+    }
+    return s;
 }
 
 // A slim bar: the track, and the share filled.
@@ -444,8 +455,8 @@ bool toggle_value(const Settings & s, Setting id) {
 
 // A row that does something when pressed, with no value of its own.
 bool is_action(Setting id) {
-    return id == Setting::clear_scratch || id == Setting::debug_report || id == Setting::screen_off_restart ||
-           id == Setting::screen_off_now;
+    return id == Setting::clear_scratch || id == Setting::debug_report || id == Setting::screen_off ||
+           id == Setting::screen_reload;
 }
 
 // Used and whole size of the app's storage, from its drive, as the row shows it.
@@ -652,12 +663,16 @@ void Dashboard::update(const hui::InputFrame & raw, float dt, ui::Feedback & fee
     // L1/R1 walk the dock, unless a question is open. A message being typed
     // takes every button until it is sent or dropped.
     const int step = input.is_pressed(Action::page_next) ? 1 : input.is_pressed(Action::page_prev) ? -1 : 0;
-    if (storage_dialog_) {
+    if (screen_ask_ != ScreenAsk::none) {
+        update_screen_off(input, dt, feedback);  // PS5LM Lean: the question, then the countdown
+    } else if (storage_dialog_) {
         update_storage_dialog(input, feedback);
     } else if (prompt_.is_open()) {
         if (prompt_.handle(input, feedback) == ui::Event::activated) {
             request_ = { Request::ask, prompt_.text() };
         }
+    } else if (input.is_pressed(Action::menu) && !dialog) {
+        ask_screen_off(ScreenAsk::off, "", feedback);  // PS5LM Lean: Options, from any page
     } else if (step != 0 && !dialog) {
         const int next = page_ + step;
         if (next >= 0 && next < kPages) {
@@ -805,6 +820,8 @@ void Dashboard::update_local(const hui::InputFrame & input, ui::Feedback & feedb
         } else if (m.fits) {
             request_ = { Request::load, m.file };
             feedback.play(Cue::launch);
+        } else if (m.fits_screen_off) {
+            ask_screen_off(ScreenAsk::load, m.file, feedback);  // PS5LM Lean
         } else {
             feedback.play(Cue::error);
         }
@@ -907,8 +924,8 @@ void Dashboard::update_market(const hui::InputFrame & input, ui::Feedback & feed
                 }
             }
             market_dir_.clear();
-            if (f.fits == 0) {
-                feedback.play(Cue::error);  // too big
+            if (f.fits == 0 && !f.fits_screen_off) {
+                feedback.play(Cue::error);  // too big, even with the screen off
             } else if (!to || (to->total > 0 && to->free < need)) {  // unknown space (no exporter) does not block
                 market_space_ = true;
                 market_dir_ = other ? other->models : "";
@@ -1025,9 +1042,8 @@ void Dashboard::update_settings(const hui::InputFrame & input, ui::Feedback & fe
         return;
     }
     // Cross does what the row is: clears, flips a switch, or opens its choices.
-    if (id == Setting::screen_off_restart || id == Setting::screen_off_now) {
-        request_ = { id == Setting::screen_off_now ? Request::screen_off_now : Request::screen_off_restart, "" };
-        feedback.play(Cue::select);
+    if (id == Setting::screen_off || id == Setting::screen_reload) {
+        ask_screen_off(id == Setting::screen_off ? ScreenAsk::off : ScreenAsk::off_reload, "", feedback);
     } else if (id == Setting::clear_scratch) {
         request_ = { Request::clear_scratch, "" };
         feedback.play(Cue::select);
@@ -1143,6 +1159,9 @@ void Dashboard::draw(DashboardFrame & frame) const {
         ui::Canvas canvas{ frame.overlay, fonts_, 0, clock_ };
         prompt_.draw(canvas);
     }
+    if (countdown_ >= 0) {
+        draw_countdown(frame.overlay);
+    }
     if (busy()) {
         draw_busy(frame.overlay);
     }
@@ -1197,13 +1216,15 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
     layout.cy = 1018;
     layout.item_gap = 36;
     std::vector<ui::Hint> h;
-    if (market_confirm_ || market_space_ || report_dialog_ || storage_dialog_ || prompt_.visible()) {
+    if (market_confirm_ || market_space_ || report_dialog_ || storage_dialog_ || prompt_.visible() ||
+        screen_ask_ != ScreenAsk::none) {
         return;  // the dialog has its own
     }
     if (picker_ && page_ == kSettingsPage) {
         h = { { ui::Button::circle, "Cancel" }, { ui::Button::cross, "Choose" } };
     } else if (page_ == kHomePage) {
-        h = { { ui::Button::l1, "Pages", ui::Button::r1 } };
+        // PS5LM Lean: the screen's memory, offered where the memory is shown.
+        h = { { ui::Button::options, "Screen off" }, { ui::Button::l1, "Pages", ui::Button::r1 } };
         if (live_.state == ServerState::ready || live_.state == ServerState::generating) {
             h.push_back({ ui::Button::square, "Demo" });
             h.push_back({ ui::Button::triangle, "Message" });
@@ -1219,6 +1240,8 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
             h = { { ui::Button::circle, "Back" } };
             if (m && (m->current || m->fits)) {
                 h.push_back({ ui::Button::cross, m->current ? "Unload" : "Load" });
+            } else if (m && m->fits_screen_off) {
+                h.push_back({ ui::Button::cross, "Load, screen off" });
             }
         } else if (section_ == kSuggested) {
             h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Download" } };
@@ -1248,7 +1271,7 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
               { ui::Button::triangle, log_errors_ ? "All lines" : "Errors only" } };
     } else {
         const Setting id = kCategories[setting_category_].rows[setting_row_].id;
-        if (id == Setting::screen_off_restart || id == Setting::screen_off_now) {
+        if (id == Setting::screen_off || id == Setting::screen_reload) {
             h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Turn off" } };
         } else if (id == Setting::clear_scratch) {
             h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Clear" } };
@@ -1285,6 +1308,7 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
             put(l, f.regular, "On your network", kLeft, 540, 22, kInk3);
             put(l, f.regular, "http://" + live_.address, kLeft, 586, 32, kInk2);
         }
+        draw_memory(l, kLeft, 868, 860);  // PS5LM Lean: what a model would get, and the screen's share
     } else {
         std::string name, build;
         split_name(live_.model_label, &name, &build);
@@ -1297,6 +1321,9 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
         }
         if (live_.model_gib > 0) {
             detail += (detail.empty() ? "" : "    ") + gb(live_.model_gib);
+        }
+        if (std::find(live_.args.begin(), live_.args.end(), "--mmproj") != live_.args.end()) {
+            detail += (detail.empty() ? "" : "    ") + std::string("reads images");  // PS5LM Lean
         }
         put(l, f.regular, detail, kLeft, 372, 24, kInk3);
 
@@ -1352,9 +1379,17 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
             }
         }
         const bool quiet = live_.state != ServerState::generating && live_.state != ServerState::loading;
-        const std::string number = !known ? kDash : big >= 100 || live_.state == ServerState::loading ? format("%.0f", big) : format("%.1f", big);
-        const float nw = put(l, f.display, number, kLeft - 8, 660, 232, quiet ? kInk2 : kInk);
-        put(l, f.regular, unit, kLeft + nw + 12, 660, 26, kInk2);
+        if (!known) {
+            // PS5LM Lean: nothing answered yet, said in words (a lone dash and
+            // "tokens per second" read as broken).
+            put(l, f.display, decision ? "No decisions yet" : "No replies yet", kLeft, 610, 72, kInk2);
+            put(l, f.regular, decision ? "The time per decision shows here" : "The speed of each reply shows here", kLeft, 660, 26,
+                kInk3);
+        } else {
+            const std::string number = big >= 100 || live_.state == ServerState::loading ? format("%.0f", big) : format("%.1f", big);
+            const float nw = put(l, f.display, number, kLeft - 8, 660, 232, quiet ? kInk2 : kInk);
+            put(l, f.regular, unit, kLeft + nw + 12, 660, 26, kInk2);
+        }
 
         if (live_.state == ServerState::loading) {
             // The model's memory as cells filling column by column, the newest
@@ -1387,13 +1422,10 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
             trace(l, live_.gen_history, { kLeft, 702, 860, 100 }, kInk.with_alpha(0.75f));
         }
 
-        // Two quiet meters: what the model holds, and how much of its context is used.
-        const double used = live_.pool_gib - live_.free_gib;
+        // Two quiet meters: what the model holds (and the screen, PS5LM Lean),
+        // and how much of its context is used.
         const float my = 868;
-        put(l, f.regular, "Memory", kLeft, my, 22, kInk2);
-        put(l, f.regular, format("%.1f", used) + " of " + gb(live_.pool_gib), kLeft + 400, my, 22, kInk,
-             gfx::Align::right);
-        meter(l, kLeft, my + 16, 400, live_.pool_gib > 0 ? (float) (used / live_.pool_gib) : 0, kInk.with_alpha(0.8f));
+        draw_memory(l, kLeft, my, 400);
         put(l, f.regular, "Context", kLeft + 460, my, 22, kInk2);
         put(l, f.regular, thousands(live_.ctx_used) + " of " + format("%.0fk", live_.ctx / 1024.0), kLeft + 860, my, 22, kInk,
              gfx::Align::right);
@@ -1438,7 +1470,12 @@ void Dashboard::draw_home(gfx::DrawList & l) const {
     std::vector<Turn> turns;
     float total = 0;
     for (auto it = live_.activity.rbegin(); it != live_.activity.rend(); ++it) {
-        const bool newest = it == live_.activity.rbegin();
+        // PS5LM Lean: the app's own vision warm-up (vision_warmup.cpp) is not a
+        // request anyone made; it stays out of the chat.
+        if (it->client.rfind("127.0.0.1", 0) == 0 && it->asked == "[image] Warm-up.") {
+            continue;
+        }
+        const bool newest = turns.empty();
         Turn t{ &*it, wrap(f.regular, it->asked.empty() ? std::string(kDash) : it->asked, 22, bubble - 40),
                 wrap(f.regular, it->answered, 22, w), 0 };
         clip(t.asked, newest ? 3 : 2, false, bubble - 40);
@@ -1561,7 +1598,8 @@ void Dashboard::draw_local(gfx::DrawList & l, const Rect & a) const {
         const float y = a.y + kRowPitch * (float) (i - first);
         std::string name, build;
         split_name(m.label, &name, &build);
-        const float nw = put(l, f.regular, f.regular.font->fit(name, 26, 640), a.x + 28, y + 36, 26, m.fits ? kInk : kInk3);
+        const bool can = m.fits || m.current || m.fits_screen_off;
+        const float nw = put(l, f.regular, f.regular.font->fit(name, 26, 640), a.x + 28, y + 36, 26, can ? kInk : kInk3);
         put(l, f.regular, build, a.x + 28 + nw + 14, y + 36, 21, kInk3);
         std::string meta = (m.decision.empty() ? "Language" : "Decision") + std::string("    ") + gb(m.size_gib);
         if (m.drive != "Internal storage" && !m.drive.empty()) {
@@ -1571,10 +1609,19 @@ void Dashboard::draw_local(gfx::DrawList & l, const Rect & a) const {
         if (plan.rfind("decision model (", 0) == 0 && plan.find("), ") != std::string::npos) {
             plan = plan.substr(plan.find("), ") + 3);  // the kind is said already
         }
+        // PS5LM Lean: why it does not fit, in a sentence: short by a little
+        // (and the screen's memory would do), or how far over this PS5 it is.
+        if (m.current && !m.fits) {
+            plan = "loaded with its own settings (app-args.txt)";
+        } else if (!m.fits && m.fits_screen_off) {
+            plan = format("%.1f GB short with the screen on", std::max(0.1, m.need_gib - screen_.budget_gib));
+        } else if (!m.fits && m.need_gib > 0) {
+            plan = "needs " + gb(m.need_gib) + "; this PS5 has " + gb(screen_.budget_gib + screen_.cost_gib) + " for a model";
+        }
         meta += "    " + plan;
-        put(l, f.regular, f.regular.font->fit(meta, 20, a.w - 260), a.x + 28, y + 66, 20, kInk3);
-        const char * state = m.current ? "Running" : m.fits ? "" : "Too big";
-        put(l, f.semibold, state, a.x + a.w - 28, y + 50, 22, m.current ? kBlue : kInk3, gfx::Align::right);
+        put(l, f.regular, f.regular.font->fit(meta, 20, a.w - 360), a.x + 28, y + 66, 20, kInk3);
+        const char * state = m.current ? "Running" : m.fits ? "" : m.fits_screen_off ? "Fits with the screen off" : "Too big";
+        put(l, f.semibold, state, a.x + a.w - 28, y + 50, 22, m.current || m.fits_screen_off ? kBlue : kInk3, gfx::Align::right);
     }
 }
 
@@ -1657,12 +1704,19 @@ void Dashboard::draw_market(gfx::DrawList & l, const Rect & a) const {
     for (int i = first; i < std::min(files, first + kVisibleRows); ++i) {
         const MarketFile & m = open->files[(size_t) i];
         const float y = top + kRowPitch * (float) (i - first);
-        put(l, f.regular, f.regular.font->fit(m.name, 26, a.w - 300), a.x + 28, y + 36, 26, m.fits == 0 ? kInk3 : kInk);
-        const std::string plan = m.checking ? "Reading its header" : m.fits == -1 ? "Square checks whether it fits" : m.plan;
-        put(l, f.regular, f.regular.font->fit(format("%.1f GB", m.bytes / 1073741824.0) + "    " + gb_text(plan), 20, a.w - 300), a.x + 28, y + 66,
+        const bool can = m.fits != 0 || m.fits_screen_off;
+        put(l, f.regular, f.regular.font->fit(m.name, 26, a.w - 360), a.x + 28, y + 36, 26, can ? kInk : kInk3);
+        std::string plan = m.checking ? "Reading its header" : m.fits == -1 ? "Square checks whether it fits" : gb_text(m.plan);
+        // PS5LM Lean: the same verdicts as the library.
+        if (m.fits == 0 && m.fits_screen_off) {
+            plan = format("%.1f GB short with the screen on", std::max(0.1, m.need_gib - screen_.budget_gib));
+        } else if (m.fits == 0 && m.need_gib > 0) {
+            plan = "needs " + gb(m.need_gib) + "; this PS5 has " + gb(screen_.budget_gib + screen_.cost_gib) + " for a model";
+        }
+        put(l, f.regular, f.regular.font->fit(format("%.1f GB", m.bytes / 1073741824.0) + "    " + plan, 20, a.w - 360), a.x + 28, y + 66,
              20, kInk3);
-        put(l, f.semibold, m.fits == 1 ? "Fits" : m.fits == 0 ? "Too big" : "", a.x + a.w - 28, y + 50, 22,
-             m.fits == 1 ? kInk2 : kInk3, gfx::Align::right);
+        put(l, f.semibold, m.fits == 1 ? "Fits" : m.fits_screen_off ? "Fits with the screen off" : m.fits == 0 ? "Too big" : "",
+             a.x + a.w - 28, y + 50, 22, m.fits_screen_off ? kBlue : m.fits == 1 ? kInk2 : kInk3, gfx::Align::right);
     }
 }
 
@@ -1892,10 +1946,18 @@ void Dashboard::draw_settings(gfx::DrawList & l) const {
         put(l, f.regular, r.label, kListX + 28, y + 36, 26, kInk);
         // The debug report's row says where the last one went, in place of its help.
         const bool status = r.id == Setting::debug_report && !report_status_.empty();
-        put(l, f.regular, f.regular.font->fit(status ? report_status_ : std::string(r.help), 20, kRight - kListX - 140),
+        std::string help = status ? report_status_ : std::string(r.help);
+        if (r.id == Setting::screen_off) {
+            help = "Frees " + screen_mb() + " for the model. Hold Triangle for 2 seconds to bring it back";
+        }
+        put(l, f.regular, f.regular.font->fit(help, 20, kRight - kListX - 340),
              kListX + 28, y + 66, 20, status && report_status_.rfind("Failed", 0) == 0 ? kRed : status ? kInk2 : kInk3);
         const float cy = y + kRowH * 0.5f;
-        if (is_toggle(r.id)) {
+        if (r.id == Setting::screen_off) {
+            // PS5LM Lean: which mode it is in, and what it costs.
+            put(l, f.regular, "On, " + screen_mb(), kRight - 28, y + 50, 24, in_rows_ && i == setting_row_ ? kInk : kInk2,
+                 gfx::Align::right);
+        } else if (is_toggle(r.id)) {
             toggle_switch(l, kRight - 28, cy, toggle_value(settings_, r.id));
         } else if (r.id == Setting::storage) {
             put(l, f.regular, full_storage_ ? "Full storage, /data/PS5LM" : app_storage_text(live_.drives, app_storage_gib_),
@@ -1912,6 +1974,23 @@ void Dashboard::draw_settings(gfx::DrawList & l) const {
             put(l, f.regular, format("%.1f GB in it", live_.scratch_gib), kRight - 28, y + 50, 22, kInk2,
                  gfx::Align::right);
         }
+    }
+    // PS5LM Lean: under the screen's rows, where the memory goes, and what
+    // turning it off does.
+    if (kCategories[setting_category_].rows[0].id == Setting::screen_off) {
+        const float x = kListX + 28, w = kRight - kListX - 56;
+        float y = kListY + kRowPitch * (float) c.count + 96;
+        draw_memory(l, x, y, w);
+        y += 120;
+        const char * lines[] = {
+            "With the screen off, the TV shows the PS5LM picture and the server keeps answering on your network.",
+            "It stays off when the app starts again, until you bring it back:",
+        };
+        for (const char * line : lines) {
+            put(l, f.regular, line, x, y, 22, kInk2);
+            y += 36;
+        }
+        wake_line(l, x, y, 22, kInk, false);
     }
 }
 
@@ -1991,6 +2070,12 @@ void sheet(gfx::DrawList & l, const Rect & r) {
 }  // namespace
 
 void Dashboard::draw_dialogs(gfx::DrawList & l) const {
+    if (screen_ask_ != ScreenAsk::none) {
+        if (countdown_ < 0) {
+            draw_screen_question(l);  // the countdown covers the whole screen (draw)
+        }
+        return;
+    }
     if (storage_dialog_) {
         draw_storage_dialog(l);
         return;
@@ -2151,6 +2236,199 @@ void Dashboard::draw_busy(gfx::DrawList & l) const {
     const float t = 0.5f + 0.5f * std::sin(clock_ * 2.4f);
     l.rounded_rect({ 960 - track * 0.5f, 700, track, 3 }, 1.5f, kHair);
     l.rounded_rect({ 960 - track * 0.5f + (track - seg) * t, 700, seg, 3 }, 1.5f, kInk);
+}
+
+// ---- PS5LM Lean: the screen's memory, and turning the screen off --------------------------
+
+namespace {
+constexpr float kCountdown = 5.0f;  // seconds on the TV before the screen goes off
+}  // namespace
+
+// The screen's share, in the words the console's own screens use: "370 MB",
+// rounded to tens (one start measures a few MB differently from the next).
+std::string Dashboard::screen_mb() const {
+    const double mb = std::round(screen_.cost_gib * 1024.0 / 10.0) * 10.0;
+    return (screen_.measured ? "" : "about ") + format("%.0f MB", mb);
+}
+
+// "Hold (Triangle) for 2 seconds to bring the screen back", with the glyph.
+float Dashboard::wake_line(gfx::DrawList & l, float x, float y, float size, Color c, bool center) const {
+    const ui::Fonts & f = fonts_;
+    const char * before = "Hold ";
+    const char * after = " for 2 seconds to bring the screen back";
+    const float glyph = size * 1.25f;
+    const float w = f.regular.measure(before, size) + glyph + f.regular.measure(after, size);
+    float at = center ? x - w * 0.5f : x;
+    at += put(l, f.regular, before, at, y, size, c);
+    ui::GlyphStyle style = ui::GlyphStyle::dark();
+    ui::draw_button(l, fonts_, style, ui::Button::triangle, at, y - size * 0.36f, glyph);
+    at += glyph;
+    put(l, f.regular, after, at, y, size, c);
+    return w;
+}
+
+// One bar: what the model (and the app) holds, the screen's share in blue,
+// and what is free, with a key under it. Narrow, the key leaves out the model:
+// the line above it says how much is used.
+void Dashboard::draw_memory(gfx::DrawList & l, float x, float y, float w) const {
+    const ui::Fonts & f = fonts_;
+    const double pool = std::max(0.0, live_.pool_gib), free = std::clamp(live_.free_gib, 0.0, pool);
+    const double used = pool - free;
+    const double scr = std::min(used, screen_.cost_gib), held = used - scr;
+    put(l, f.regular, "Memory", x, y, 22, kInk2);
+    put(l, f.regular, format("%.1f", used) + " of " + gb(pool), x + w, y, 22, kInk, gfx::Align::right);
+    const float by = y + 16, bh = 6;
+    l.rounded_rect({ x, by, w, bh }, 3, kHair);
+    if (pool > 0) {
+        const float wm = w * (float) (held / pool), ws = w * (float) (scr / pool);
+        if (wm > 2) {
+            l.rounded_rect({ x, by, wm, bh }, 3, kInk.with_alpha(0.8f));
+        }
+        if (ws > 2) {
+            l.rounded_rect({ x + wm + 3, by, std::max(4.0f, ws - 3), bh }, 3, kBlue);
+        }
+    }
+    const float ky = y + 54;
+    float kx = x;
+    const auto key = [&](Color swatch, const std::string & label, Color text) {
+        l.rounded_rect({ kx, ky - 13, 12, 12 }, 3, swatch);
+        kx += 20;
+        kx += put(l, f.regular, label, kx, ky, 20, text) + 30;
+    };
+    if (w >= 600 && held >= 0.05) {
+        key(kInk.with_alpha(0.8f), (live_.model_label.empty() ? "App " : "Model ") + gb(held), kInk2);
+    }
+    key(kBlue, "Screen " + format("%.0f MB", std::round(screen_.cost_gib * 1024.0 / 10.0) * 10.0), kInk);
+    key(kHair, "Free " + gb(free), kInk2);
+}
+
+void Dashboard::ask_screen_off(ScreenAsk what, std::string model, ui::Feedback & feedback) {
+    screen_ask_ = what;
+    screen_model_ = std::move(model);
+    countdown_ = -1;
+    feedback.play(Cue::modal_open);
+}
+
+// The question, then five seconds on the TV that say how to bring the screen
+// back, then the request. Circle steps back at either stage; Cross skips the wait.
+void Dashboard::update_screen_off(const hui::InputFrame & input, float dt, ui::Feedback & feedback) {
+    if (busy()) {
+        screen_ask_ = ScreenAsk::none;  // a restart began meanwhile: nothing to turn off
+        countdown_ = -1;
+        return;
+    }
+    if (countdown_ < 0) {
+        if (input.is_pressed(Action::confirm)) {
+            countdown_ = kCountdown;
+            feedback.play(Cue::select);
+        } else if (input.is_pressed(Action::back) || input.is_pressed(Action::menu)) {
+            screen_ask_ = ScreenAsk::none;
+            feedback.play(Cue::modal_close);
+        }
+        return;
+    }
+    if (input.is_pressed(Action::back)) {
+        screen_ask_ = ScreenAsk::none;
+        countdown_ = -1;
+        feedback.play(Cue::back);
+        return;
+    }
+    const float was = countdown_;
+    countdown_ -= dt;
+    if (std::ceil(countdown_) < std::ceil(was) && countdown_ > 0) {
+        feedback.play(Cue::focus);  // a tick each second
+    }
+    if (input.is_pressed(Action::confirm) || countdown_ <= 0) {
+        request_ = screen_ask_ == ScreenAsk::load       ? Request{ Request::load_screen_off, screen_model_ }
+                 : screen_ask_ == ScreenAsk::off_reload ? Request{ Request::screen_off_restart, "" }
+                                                        : Request{ Request::screen_off, "" };
+        screen_ask_ = ScreenAsk::none;
+        countdown_ = -1;
+        feedback.play(Cue::select);
+    }
+}
+
+void Dashboard::draw_screen_question(gfx::DrawList & l) const {
+    const ui::Fonts & f = fonts_;
+    const Rect r{ 960 - 600, 540 - 235, 1200, 470 };
+    sheet(l, r);
+    const float text_w = r.w - 112;
+    float y = r.y + 150;
+    const auto para = [&](const std::string & text, Color c) {
+        for (const auto & line : wrap(f.regular, text, 24, text_w)) {
+            put(l, f.regular, line, r.x + 56, y, 24, c);
+            y += 36;
+        }
+        y += 16;
+    };
+    std::string name, build;
+    split_name(base_label(screen_model_), &name, &build);
+    const std::string where = live_.address.empty() ? std::string("on port 8081") : "at http://" + live_.address;
+    if (screen_ask_ == ScreenAsk::load) {
+        put(l, f.semibold, f.semibold.font->fit("Load " + name + " with the screen off?", 34, text_w), r.x + 56, r.y + 86, 34, kInk);
+        double short_by = 0.1;
+        for (const auto & m : live_.models) {
+            if (m.file == screen_model_) {
+                short_by = std::max(0.1, m.need_gib - screen_.budget_gib);
+            }
+        }
+        para(format("It is %.1f GB short with the screen on. ", short_by) + "The screen holds " + screen_mb() +
+                 "; with it off, the model fits.", kInk2);
+    } else if (screen_ask_ == ScreenAsk::off_reload) {
+        put(l, f.semibold, "Turn the screen off and reload the model?", r.x + 56, r.y + 86, 34, kInk);
+        para("The app restarts without the screen, so the model loads again with the screen's " + screen_mb() +
+                 " in one piece: for a model that needs all of it. About 20 seconds.", kInk2);
+    } else {
+        put(l, f.semibold, "Turn the screen off?", r.x + 56, r.y + 86, 34, kInk);
+        para("The screen holds " + screen_mb() + " of this PS5's " + gb(live_.pool_gib) +
+                 ". With it off, the model gets that memory.", kInk2);
+    }
+    para("The TV shows the PS5LM picture. The server keeps answering " + where + ".", kInk2);
+    wake_line(l, r.x + 56, y, 24, kInk, false);
+    y += 52;
+    put(l, f.regular, "It stays off when the app starts again.", r.x + 56, y, 22, kInk3);
+    ui::GlyphStyle style = ui::GlyphStyle::dark();
+    style.label = kInk2;
+    ui::HintLayout layout;
+    layout.size = 32;
+    layout.text_size = 22;
+    layout.cy = r.y + r.h - 56;
+    const ui::Hint h[] = { { ui::Button::circle, "Cancel" },
+                           { ui::Button::cross, screen_ask_ == ScreenAsk::load ? "Load, screen off" : "Turn off" } };
+    ui::draw_hints(l, fonts_, style, h, 2, r.x + r.w - 56, true, layout);
+}
+
+// The whole screen for five seconds: when it goes, and how to bring it back.
+void Dashboard::draw_countdown(gfx::DrawList & l) const {
+    const ui::Fonts & f = fonts_;
+    l.rounded_rect({ 0, 0, 1920, 1080 }, 0, kBase);
+    const int left = std::max(1, (int) std::ceil(countdown_));
+    put(l, f.display, format("Screen off in %.0f", (double) left), 960, 470, 88, kInk, gfx::Align::center);
+    wake_line(l, 960, 560, 32, kInk, true);
+    std::string then;
+    if (screen_ask_ == ScreenAsk::load) {
+        std::string name, build;
+        split_name(base_label(screen_model_), &name, &build);
+        then = "Then " + name + " loads with the screen's memory.";
+    } else if (screen_ask_ == ScreenAsk::off_reload) {
+        then = "Then the model loads again with the screen's memory, about 20 seconds.";
+    } else {
+        then = live_.address.empty() ? std::string("The model keeps running.")
+                                     : "The model keeps running at http://" + live_.address + ".";
+    }
+    put(l, f.regular, then, 960, 612, 24, kInk2, gfx::Align::center);
+    const float track = 360, done = tween::clamp01(1.0f - countdown_ / kCountdown);
+    l.rounded_rect({ 960 - track * 0.5f, 660, track, 3 }, 1.5f, kHair);
+    l.rounded_rect({ 960 - track * 0.5f, 660, std::max(3.0f, track * done), 3 }, 1.5f, kInk);
+    ui::GlyphStyle style = ui::GlyphStyle::dark();
+    style.label = kInk2;
+    ui::HintLayout layout;
+    layout.size = 32;
+    layout.text_size = 22;
+    layout.cy = 760;
+    const ui::Hint h[] = { { ui::Button::circle, "Stay on" }, { ui::Button::cross, "Off now" } };
+    const float hw = ui::measure_hints(fonts_, h, 2, layout);
+    ui::draw_hints(l, fonts_, style, h, 2, 960 + hw * 0.5f, true, layout);
 }
 
 }  // namespace ps5lm

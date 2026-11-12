@@ -62,8 +62,9 @@ std::string get_text(const std::string & url, const std::string & range, std::st
 
 }  // namespace
 
-void Market::start(double budget_gib) {
+void Market::start(double budget_gib, double screen_gib) {
     budget_gib_ = budget_gib;
+    screen_gib_ = screen_gib;
 }
 
 MarketView Market::snapshot() {
@@ -149,8 +150,8 @@ void Market::open_repo(int index) {
                     f.bytes = e["lfs"].value("size", f.bytes);
                 }
                 // Before the header is read: fits if the weights and the
-                // planner's smallest reserve do.
-                f.fits = f.bytes / 1073741824.0 + 1.0 <= budget_gib_ ? -1 : 0;
+                // planner's smallest reserve do (with the screen off, at most).
+                f.fits = f.bytes / 1073741824.0 + 1.0 <= budget_gib_ + screen_gib_ ? -1 : 0;
                 if (f.fits == 0) {
                     f.plan = "too big: the weights alone need more than is free";
                 }
@@ -202,11 +203,15 @@ void Market::plan_file(int repo, int file) {
                                               "bytes=0-16777215", &error, 16u << 20);
             const ModelInfo m = read_model_header(job.file, head, job.bytes);
             const Plan      p = plan_model(m, budget_gib_);
+            // PS5LM Lean: too big with the screen on, but not without it.
+            const bool screen_off = m.ok && !p.fits && screen_gib_ > 0 && plan_model(m, budget_gib_ + screen_gib_).fits;
             std::lock_guard<std::mutex> lock(mutex_);
             for (auto & r : view_.repos) {
                 for (auto & f : r.files) {
                     if (r.id == job.repo && f.name == job.file) {
                         f.fits = m.ok ? (p.fits ? 1 : 0) : -2;
+                        f.fits_screen_off = screen_off;
+                        f.need_gib = p.fits ? 0 : p.total_gib;
                         f.checking = false;
                         f.plan = m.ok ? p.why : (!error.empty() ? error : m.error);
                     }

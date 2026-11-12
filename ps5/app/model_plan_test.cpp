@@ -74,6 +74,20 @@ int main(int argc, char ** argv) {
     const ps5lm::Plan cp = ps5lm::plan_model(c, budget);
     assert(cp.fits && cp.ctx > 4096 && has_args(cp, "-ub", "64"));
 
+    // PS5LM Lean: a model that does not fit says the least it needs, its cache
+    // at 4k included, and fits once the screen's memory is added.
+    {
+        const ps5lm::Plan q4 = ps5lm::plan_model(c, 64.0, 4096, "q4_0");
+        assert(q4.fits && q4.ctx == 4096);
+        const double least = q4.total_gib;  // 4k, q4_0: the least this model can run with
+        assert(least > q4.weights_gib + q4.state_gib + q4.reserve_gib);
+        const ps5lm::Plan short_by = ps5lm::plan_model(c, least - 0.2);
+        assert(!short_by.fits);
+        assert(short_by.total_gib > least - 0.001 && short_by.total_gib < least + 0.001);  // the cache is counted
+        assert(short_by.why.find("needs") == 0);
+        assert(ps5lm::plan_model(c, least - 0.2 + 0.36).fits);  // the screen's memory makes it fit
+    }
+
     // A larger prompt batch costs compute buffer, counted by the feed-forward width.
     Gguf wide_ff = chat;
     wide_ff.kv("qwen35.feed_forward_length", 12288u);
