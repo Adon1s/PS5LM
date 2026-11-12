@@ -5,7 +5,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ps5lm {
 
@@ -35,5 +37,19 @@ void probe_memory(bool model_loaded);
 // records from that port (type, rate, samples a read, format, seconds);
 // "out=name" writes mic-test-name.wav instead.
 void probe_mic(std::string spec);
+
+// One take from the controller's microphone for speech-to-text: the general
+// port, 16 kHz mono. `silent_state` has bit 4 set when the mute button was on at
+// the start or the end of the take. False with `error` set when it failed; a
+// recording already running (the mic request) counts as a failure.
+struct MicTake {
+    std::vector<int16_t> samples;
+    uint32_t             rate = 16000;
+    int                  silent_state = 0;
+    int                  failed_reads = 0;
+    double               seconds_taken = 0;
+    std::string          error;
+};
+bool mic_take(int seconds, MicTake & take);
 
 }  // namespace ps5lm

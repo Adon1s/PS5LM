@@ -56,6 +56,7 @@
 #include "model_plan.hpp"
 #include "probes.hpp"
 #include "report.hpp"
+#include "stt.hpp"
 #include "settings.hpp"
 #include "storage.hpp"
 #include "stats.hpp"
@@ -1861,6 +1862,10 @@ int main(int, char **) {
                 std::thread(probe_memory, !models.running.empty()).detach();
             } else if (std::string mic = take_request_file(data_path("mic")); !mic.empty()) {
                 std::thread(probe_mic, mic).detach();  // PS5LM Lean, probe/mic: a recording from the controller
+            } else if (std::string stt = take_request_file(data_path("stt")); !stt.empty()) {
+                // PS5LM Lean: speech-to-text with whisper.cpp, measured beside the running model.
+                // Memory lines without ggml's devices: those are asked from the main loop only.
+                ps5lm::start_stt(stt, [](const char * when) { log_memory(when, false); });
             } else if (std::string q = take_request_file(data_path("search")); !q.empty()) {
                 market.search(q == "-" ? std::string() : q);  // a query typed on the PC
             }

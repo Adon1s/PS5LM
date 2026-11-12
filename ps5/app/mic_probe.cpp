@@ -499,6 +499,72 @@ void probe_mic(std::string spec_text) {
     g_mic_busy = false;
 }
 
+// One take for speech-to-text (stt.cpp): the general port at 16 kHz mono, as
+// the probe measured it, without its logging. The silent state is read at the
+// start and at the end, so a mute pressed during the take is seen.
+bool mic_take(int seconds, MicTake & take) {
+    take = MicTake{};
+    if (g_mic_busy.exchange(true)) {
+        take.error = "a recording is already running";
+        return false;
+    }
+    struct Release {
+        ~Release() { g_mic_busy = false; }
+    } release;
+    const Calls c = linked_calls();
+    if (!c.usable()) {
+        take.error = "the audio-input calls are not bound";
+        return false;
+    }
+    int user = -1;
+    int rc = sceUserServiceGetInitialUser(&user);
+    if (rc != 0) {
+        sceUserServiceInitialize(nullptr);
+        rc = sceUserServiceGetInitialUser(&user);
+    }
+    char err[96];
+    if (rc != 0) {
+        std::snprintf(err, sizeof(err), "no signed-in user (sceUserServiceGetInitialUser = 0x%08x)", (unsigned) rc);
+        take.error = err;
+        return false;
+    }
+    const Port p{ 1, 16000, 256, 0 };
+    const int  handle = c.open(user, p.type, 0, p.len, p.freq, p.param);
+    if (handle < 0) {
+        std::snprintf(err, sizeof(err), "sceAudioInOpen = 0x%08x", (unsigned) handle);
+        take.error = err;
+        return false;
+    }
+    take.rate = p.freq;
+    const int start_state = c.silent ? c.silent(handle) : 0;
+    take.silent_state = start_state > 0 ? start_state : 0;
+    const uint64_t       want = (uint64_t) seconds * p.freq;
+    std::vector<int16_t> buf(p.len);
+    take.samples.reserve(want);
+    int        run = 0;
+    const auto t0 = Clock::now();
+    while (take.samples.size() < want) {
+        const int got = c.input(handle, buf.data());
+        if (got < 0) {
+            ++take.failed_reads;
+            if (++run >= 200) {
+                std::snprintf(err, sizeof(err), "sceAudioInInput = 0x%08x, 200 times in a row", (unsigned) got);
+                take.error = err;
+                break;
+            }
+            sceKernelUsleep(5000);
+            continue;
+        }
+        run = 0;
+        take.samples.insert(take.samples.end(), buf.begin(), buf.end());
+    }
+    take.seconds_taken = std::chrono::duration<double>(Clock::now() - t0).count();
+    const int end_state = c.silent ? c.silent(handle) : 0;
+    take.silent_state |= end_state > 0 ? end_state : 0;
+    c.close(handle);
+    return take.error.empty();
+}
+
 }  // namespace ps5lm
 
 #else  // not the console: the preview and host tests have no microphone
@@ -507,6 +573,12 @@ namespace ps5lm {
 
 void probe_mic(std::string spec_text) {
     log_line("mic: only on the console (request '%s')\n", spec_text.c_str());
+}
+
+bool mic_take(int, MicTake & take) {
+    take = MicTake{};
+    take.error = "no microphone off the console";
+    return false;
 }
 
 }  // namespace ps5lm

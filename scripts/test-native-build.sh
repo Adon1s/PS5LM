@@ -22,6 +22,9 @@ done
 # Host check, no console or server: FtpWriter refuses a path with a line break.
 clang++ -std=c++17 -O1 ps5/app/ftp_writer_test.cpp ps5/app/ftp_writer.cpp -o "$output/tools/ftp_writer_test"
 "$output/tools/ftp_writer_test"
+# PS5LM Lean: the WAV reader and silence gate speech-to-text uses (ps5/app/stt_audio.cpp).
+clang++ -std=c++17 -O1 ps5/app/stt_audio_test.cpp ps5/app/stt_audio.cpp -o "$output/tools/stt_audio_test"
+"$output/tools/stt_audio_test"
 ui="$root/third_party/ps5-homebrew-ui"
 ui_revision=$(git ls-tree HEAD third_party/ps5-homebrew-ui | awk '{print $3}')
 [[ -f "$ui/tools/fetch-opengl-sdk.sh" && $(git -C "$ui" rev-parse HEAD) == "$ui_revision" ]] || {
@@ -35,6 +38,10 @@ llama_revision=$(git ls-tree HEAD third_party/llama.cpp | awk '{print $3}')
 ftpsrv_revision=$(git ls-tree HEAD third_party/ftpsrv | awk '{print $3}')
 [[ -f "$root/third_party/ftpsrv/Makefile.ps5" && $(git -C "$root/third_party/ftpsrv" rev-parse HEAD) == "$ftpsrv_revision" ]] || {
     echo 'title-check: initialize the pinned ftpsrv submodule first' >&2; exit 2;
+}
+whisper_revision=$(git ls-tree HEAD third_party/whisper.cpp | awk '{print $3}')
+[[ -f "$root/third_party/whisper.cpp/src/whisper.cpp" && $(git -C "$root/third_party/whisper.cpp" rev-parse HEAD) == "$whisper_revision" ]] || {
+    echo 'title-check: initialize the pinned whisper.cpp submodule first' >&2; exit 2;
 }
 vk="$PS5LM_NATIVE_SOURCES/PS5_Vulkan"
 sdk_fork="$PS5LM_NATIVE_SOURCES/PS5_PayloadSDK"
@@ -149,7 +156,7 @@ title_id=$(python3 -c 'import json; print(json.load(open("ps5/app/sce_sys/param.
 app="$root/build/app-ps5/title/$title_id"
 bash "$vk/tools/inspect.sh" "$app/eboot.bin"
 "$vk/build/host/ps5-native-tool" self --inspect --file "$app/eboot.bin"
-python3 - "$output" "$app" "$mesa_base" "$mesa_patched" "$ui_revision" "$llama_revision" "$vk_revision" "$sdk_revision" "$root" <<'PY'
+python3 - "$output" "$app" "$mesa_base" "$mesa_patched" "$ui_revision" "$llama_revision" "$vk_revision" "$sdk_revision" "$root" "$whisper_revision" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -165,6 +172,7 @@ result = {
     'mesa_patched_revision': sys.argv[4],
     'ui_revision': sys.argv[5],
     'llama_revision': sys.argv[6],
+    'whisper_revision': sys.argv[10],
     'ps5_vulkan_revision': sys.argv[7],
     'ps5_payload_sdk_revision': sys.argv[8],
     # PS5LM Lean: the title heap is the pinned SDK's with these applied.

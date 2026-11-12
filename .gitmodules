@@ -7,3 +7,6 @@
 [submodule "third_party/ftpsrv"]
 	path = third_party/ftpsrv
 	url = https://github.com/drakmor/ftpsrv
+[submodule "third_party/whisper.cpp"]
+	path = third_party/whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp
