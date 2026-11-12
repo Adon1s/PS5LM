@@ -239,3 +239,6 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - The planner (Models page) still assumes the old heap, so it now under-promises by about 700 MiB (for example
     "images need 11.9 GiB" for Q2_K_XL). Write-up: `docs/handoffs/RESULT-ps5lm-sched-memory-20261112.md` in the
     RenoIntel tree.
+  - Checked on the console as lean.20 (`c03e1f9`, installed over sched.1), screen off, Q2_K_XL v10: **1,792 / 1,819
+    MiB when ready**, CPU heap 0.15 GiB; 1,376 / 1,620 after the warm-up (11.8 s); an `stt` of the saved live take
+    came back word for word in 1,683 ms (whisper loaded in 696 ms), the largest block untouched at 1,376.
