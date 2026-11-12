@@ -135,7 +135,8 @@ ps5lm::Live sample(float seconds, bool generating) {
     const char * files[] = { "Qwen3.8-27B-UD-IQ1_S", "Qwen3.8-27B-UD-IQ2_S", "Qwen3.8-27B-UD-IQ2_XXS",
                              "Qwen3.8-27B-UD-Q2_K_XL", "Mistral-Small-3.2-24B-Instruct-Q3_K_M", "gpt-oss-20b-MXFP4" };
     const char * plans[] = { "64k context, q8_0 cache: 8.9 of 11.8 GiB", "64k context, q8_0 cache: 11.0 of 11.8 GiB",
-                             "64k context, q8_0 cache: 9.9 of 11.8 GiB", "64k context, q4_0 cache: 11.3 of 11.8 GiB",
+                             "text only (images need 12.0 GiB): 64k context, q8_0 cache: 9.9 of 11.8 GiB free",
+                             "64k context, q4_0 cache: 11.3 of 11.8 GiB",
                              "needs 12.0 GiB with a 4k context; 11.8 GiB is free",
                              "needs 12.9 GiB with a 4k context; 11.8 GiB is free" };
     const double sizes[] = { 5.77, 7.80, 6.77, 9.15, 10.7, 11.3 };
@@ -150,6 +151,9 @@ ps5lm::Live sample(float seconds, bool generating) {
         m.fits = i < 4;
         m.need_gib = needs[i];
         m.fits_screen_off = i == 4;
+        m.text_only = i == 2;  // lean.16: text only now, images with the screen off
+        m.images_gib = i == 2 ? 12.0 : 0;
+        m.images_screen_off = i == 2;
         m.current = i == 3;
         m.preset = i < 4 ? "Qwen 3.8" : i == 4 ? "Mistral" : "gpt-oss";
         L.models.push_back(m);
@@ -533,5 +537,12 @@ int main(int argc, char ** argv) {
     step(80, {}, false);
     shot("26-sleep-countdown");
     step(20, press(A::west), false);
+    // lean.16: a model that fits text only, and reads images with the screen off.
+    step(30, nav(D::up), false);  // still in the library, on Mistral: up to IQ2_XXS
+    step(30, nav(D::up), false);
+    shot("27-models-text-only");
+    step(30, press(A::confirm), false);
+    shot("28-models-images-question");
+    step(20, press(A::back), false);
     return ok ? 0 : 1;
 }

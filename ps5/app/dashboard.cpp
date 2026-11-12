@@ -832,6 +832,8 @@ void Dashboard::update_local(const hui::InputFrame & input, ui::Feedback & feedb
         if (m.current) {
             request_ = { Request::unload, m.file };
             feedback.play(Cue::select);
+        } else if (m.fits && m.images_screen_off) {
+            ask_screen_off(ScreenAsk::load_images, m.file, feedback);  // PS5LM Lean: images, or text only
         } else if (m.fits) {
             request_ = { Request::load, m.file };
             feedback.play(Cue::launch);
@@ -1253,7 +1255,9 @@ void Dashboard::draw_hints(gfx::DrawList & l) const {
         } else if (section_ == kLocal) {
             const ModelRow * m = local_cursor_ < (int) live_.models.size() ? &live_.models[(size_t) local_cursor_] : nullptr;
             h = { { ui::Button::circle, "Back" } };
-            if (m && (m->current || m->fits)) {
+            if (m && !m->current && m->fits && m->images_screen_off) {
+                h.push_back({ ui::Button::cross, "Load" });  // asks: images with the screen off, or text only
+            } else if (m && (m->current || m->fits)) {
                 h.push_back({ ui::Button::cross, m->current ? "Unload" : "Load" });
             } else if (m && m->fits_screen_off) {
                 h.push_back({ ui::Button::cross, "Load, screen off" });
@@ -1626,7 +1630,9 @@ void Dashboard::draw_local(gfx::DrawList & l, const Rect & a) const {
         }
         // PS5LM Lean: why it does not fit, in a sentence: short by a little
         // (and the screen's memory would do), or how far over this PS5 it is.
-        if (m.current && !m.fits) {
+        if (m.current && live_.plan.empty()) {
+            plan = "running with its own settings (app-args.txt)";
+        } else if (m.current && !m.fits) {
             plan = "loaded with its own settings (app-args.txt)";
         } else if (!m.fits && m.fits_screen_off) {
             plan = format("%.1f GB short with the screen on", std::max(0.1, m.need_gib - screen_.budget_gib));
@@ -1635,8 +1641,12 @@ void Dashboard::draw_local(gfx::DrawList & l, const Rect & a) const {
         }
         meta += "    " + plan;
         put(l, f.regular, f.regular.font->fit(meta, 20, a.w - 360), a.x + 28, y + 66, 20, kInk3);
-        const char * state = m.current ? "Running" : m.fits ? "" : m.fits_screen_off ? "Fits with the screen off" : "Too big";
-        put(l, f.semibold, state, a.x + a.w - 28, y + 50, 22, m.current || m.fits_screen_off ? kBlue : kInk3, gfx::Align::right);
+        const char * state = m.current ? "Running"
+                           : m.fits && m.images_screen_off ? "Images with the screen off"
+                           : m.fits && m.text_only ? "Text only"
+                           : m.fits ? "" : m.fits_screen_off ? "Fits with the screen off" : "Too big";
+        const bool blue = m.current || m.fits_screen_off || (m.fits && m.images_screen_off);
+        put(l, f.semibold, state, a.x + a.w - 28, y + 50, 22, blue ? kBlue : kInk3, gfx::Align::right);
     }
 }
 
@@ -2346,6 +2356,10 @@ void Dashboard::update_screen_off(const hui::InputFrame & input, float dt, ui::F
         if (input.is_pressed(Action::confirm)) {
             countdown_ = kCountdown;
             feedback.play(Cue::select);
+        } else if (screen_ask_ == ScreenAsk::load_images && input.is_pressed(Action::north)) {
+            request_ = { Request::load, screen_model_ };  // text only, the screen stays
+            screen_ask_ = ScreenAsk::none;
+            feedback.play(Cue::launch);
         } else if (input.is_pressed(Action::back) || input.is_pressed(Action::menu)) {
             screen_ask_ = ScreenAsk::none;
             feedback.play(Cue::modal_close);
@@ -2367,7 +2381,8 @@ void Dashboard::update_screen_off(const hui::InputFrame & input, float dt, ui::F
         feedback.play(Cue::focus);  // a tick each second
     }
     if (input.is_pressed(Action::confirm) || countdown_ <= 0) {
-        request_ = screen_ask_ == ScreenAsk::load       ? Request{ Request::load_screen_off, screen_model_ }
+        request_ = screen_ask_ == ScreenAsk::load || screen_ask_ == ScreenAsk::load_images
+                                                        ? Request{ Request::load_screen_off, screen_model_ }
                  : screen_ask_ == ScreenAsk::off_reload ? Request{ Request::screen_off_restart, "" }
                  : screen_ask_ == ScreenAsk::sleep      ? Request{ Request::screen_sleep, "" }
                                                         : Request{ Request::screen_off, "" };
@@ -2403,6 +2418,17 @@ void Dashboard::draw_screen_question(gfx::DrawList & l) const {
         }
         para(format("It is %.1f GB short with the screen on. ", short_by) + "The screen holds " + screen_mb() +
                  "; with it off, the model fits.", kInk2);
+    } else if (screen_ask_ == ScreenAsk::load_images) {
+        put(l, f.semibold, f.semibold.font->fit("Load " + name + " with images?", 34, text_w), r.x + 56, r.y + 86, 34, kInk);
+        double images = 0;
+        for (const auto & m : live_.models) {
+            if (m.file == screen_model_) {
+                images = m.images_gib;
+            }
+        }
+        para("With images it needs " + gb(images) + ", and with the screen on this PS5 has " + gb(screen_.budget_gib) +
+                 " for a model, so it would load text only. The screen holds " + screen_mb() +
+                 "; with it off, the model reads images.", kInk2);
     } else if (screen_ask_ == ScreenAsk::off_reload) {
         put(l, f.semibold, "Turn the screen off and reload the model?", r.x + 56, r.y + 86, 34, kInk);
         para("The app restarts without the screen, so the model loads again with the screen's " + screen_mb() +
@@ -2422,6 +2448,12 @@ void Dashboard::draw_screen_question(gfx::DrawList & l) const {
     layout.size = 32;
     layout.text_size = 22;
     layout.cy = r.y + r.h - 56;
+    if (screen_ask_ == ScreenAsk::load_images) {
+        const ui::Hint h[] = { { ui::Button::circle, "Cancel" }, { ui::Button::triangle, "Text only, screen on" },
+                               { ui::Button::cross, "Images, screen off" } };
+        ui::draw_hints(l, fonts_, style, h, 3, r.x + r.w - 56, true, layout);
+        return;
+    }
     const ui::Hint h[] = { { ui::Button::circle, "Cancel" },
                            { ui::Button::cross, screen_ask_ == ScreenAsk::load ? "Load, screen off" : "Turn off" } };
     ui::draw_hints(l, fonts_, style, h, 2, r.x + r.w - 56, true, layout);
@@ -2446,10 +2478,11 @@ void Dashboard::draw_countdown(gfx::DrawList & l) const {
     put(l, f.display, format("Screen off in %.0f", (double) left), 960, 470, 88, kInk, gfx::Align::center);
     wake_line(l, 960, 560, 32, kInk, true);
     std::string then;
-    if (screen_ask_ == ScreenAsk::load) {
+    if (screen_ask_ == ScreenAsk::load || screen_ask_ == ScreenAsk::load_images) {
         std::string name, build;
         split_name(base_label(screen_model_), &name, &build);
-        then = "Then " + name + " loads with the screen's memory.";
+        then = "Then " + name + (screen_ask_ == ScreenAsk::load_images ? " loads with images, with the screen's memory."
+                                                                        : " loads with the screen's memory.");
     } else if (screen_ask_ == ScreenAsk::off_reload) {
         then = "Then the model loads again with the screen's memory, about 20 seconds.";
     } else {

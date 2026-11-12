@@ -787,10 +787,16 @@ struct Models {
             row.current = path == running;
             // PS5LM Lean: too big with the screen on; with its memory free?
             row.need_gib = p.fits ? 0 : p.total_gib;
-            row.fits_screen_off = !p.fits && screen_gib > 0 && plan_model(m, budget_gib + screen_gib, settings.ctx_cap, kv).fits;
+            row.text_only = p.text_only;
+            row.images_gib = p.images_gib;
+            if (screen_gib > 0 && (!p.fits || p.text_only)) {
+                const Plan off = plan_model(m, budget_gib + screen_gib, settings.ctx_cap, kv);
+                row.fits_screen_off = !p.fits && off.fits;
+                row.images_screen_off = p.text_only && off.fits && !off.text_only;  // lean.16
+            }
             rows.push_back(row);
             ps5lm::log_line("model %s (%s): %s%s\n", m.file_name.c_str(), m.arch.c_str(), p.why.c_str(),
-                            row.fits_screen_off ? " (fits with the screen off)" : "");
+                            row.fits_screen_off ? " (fits with the screen off)" : row.images_screen_off ? " (images with the screen off)" : "");
         }
         return rows;
     }

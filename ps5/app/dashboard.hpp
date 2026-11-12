@@ -153,7 +153,7 @@ class Dashboard {
 
     // PS5LM Lean: the screen-off question, the countdown after it, and the
     // memory bar that shows the screen's share.
-    enum class ScreenAsk { none, off, off_reload, load, sleep };
+    enum class ScreenAsk { none, off, off_reload, load, load_images, sleep };
     void ask_screen_off(ScreenAsk what, std::string model, hui::ui::Feedback & feedback);
     void update_screen_off(const hui::InputFrame & input, float dt, hui::ui::Feedback & feedback);
     void draw_screen_question(hui::gfx::DrawList & list) const;

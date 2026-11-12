@@ -57,6 +57,12 @@ struct ModelRow {
     // the smallest cache), and whether it fits once the screen's memory is free.
     double      need_gib = 0;
     bool        fits_screen_off = false;
+    // PS5LM Lean (lean.16): it fits only text only (the planner left its
+    // projector out), what it needs with images, and whether images fit once
+    // the screen's memory is free.
+    bool        text_only = false;
+    double      images_gib = 0;
+    bool        images_screen_off = false;
 };
 
 struct Live {

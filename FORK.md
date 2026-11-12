@@ -159,3 +159,11 @@ What is changed, newest last:
 Install: download the `ps5lm-title-<commit>` artifact from the Actions run, check `eboot.bin` against
 `native-ci/result.json`, and copy `app-ps5/title/PPSA99590` to `/data/homebrew/` over FTP. On OnionHEN, add
 PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
+- 2026-11-12 (lean.16): a model that fits text only says whether it reads images with the screen off.
+  - With lean.15's text-only plans, a vision model that fits only without its projector says so on its row ("Text
+    only"), and when it would fit with its projector once the screen's memory is free, "Images with the screen
+    off". Cross on that row asks: Cross loads it with images and the screen off (one restart without the screen,
+    as "Fits with the screen off" does), Triangle loads it text only with the screen on.
+  - The running model, when `app-args.txt` started it (no planner line), says "running with its own settings
+    (app-args.txt)" instead of the planner's plan, which may not be what it runs (Q2_K_XL runs with images there).
+  - The planner's log line notes "(images with the screen off)" for such models.
