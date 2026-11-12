@@ -1884,6 +1884,36 @@ int main(int, char **) {
                 // PS5LM Lean: speech-to-text with whisper.cpp, measured beside the running model.
                 // Memory lines without ggml's devices: those are asked from the main loop only.
                 ps5lm::start_stt(stt, [](const char * when) { log_memory(when, false); });
+            } else if (std::string c = take_request_file(data_path("chat")); !c.empty()) {
+                // PS5LM Lean: the Home chat driven from the PC, for tests (scripts/ps5lm-app.sh chat):
+                // new, talk, stop, cancel, send (the latest transcript), say:words_with_underscores,
+                // or show (the conversation and the microphone, in app.log).
+                if (c == "new") {
+                    chat.new_chat();
+                } else if (c == "talk") {
+                    chat.talk_start();
+                } else if (c == "stop") {
+                    chat.talk_stop();
+                } else if (c == "cancel") {
+                    chat.talk_cancel();
+                } else if (c == "send" || c.rfind("say:", 0) == 0) {
+                    std::string text = c == "send" ? chat.view().transcript : c.substr(4);
+                    std::replace(text.begin(), text.end(), '_', ' ');
+                    ps5lm::log_line("chat request: %s\n", chat.send(text, live.ctx) ? "sent" : "not sent");
+                }
+                const ps5lm::ChatView v = chat.view();
+                static const char * const kMic[] = { "off", "idle", "loading", "recording", "transcribing", "ready",
+                                                     "muted", "silent", "failed" };
+                ps5lm::log_line("chat view: %zu turns, %d older not sent, %s; mic %s %.1f s, note \"%s\", transcript %u "
+                                "\"%s\" (%.0f ms); whisper %s %d MiB\n",
+                                v.turns.size(), v.dropped, v.answering ? "answering" : "not answering",
+                                kMic[(int) v.mic], v.seconds, v.note.c_str(), v.transcript_seq, v.transcript.c_str(),
+                                v.transcribe_ms, v.whisper_loaded ? "loaded" : "not loaded", v.whisper_mib);
+                for (const ps5lm::ChatTurn & t : v.turns) {
+                    ps5lm::log_line("chat view:   %s%s%s: %.200s\n", t.role == ps5lm::ChatTurn::Role::user ? "user" : "model",
+                                    t.spoken ? " (spoken)" : "", t.failed ? " (failed)" : t.streaming ? " (writing)" : "",
+                                    t.text.c_str());
+                }
             } else if (std::string q = take_request_file(data_path("search")); !q.empty()) {
                 market.search(q == "-" ? std::string() : q);  // a query typed on the PC
             }
