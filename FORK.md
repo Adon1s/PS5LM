@@ -167,3 +167,13 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - The running model, when `app-args.txt` started it (no planner line), says "running with its own settings
     (app-args.txt)" instead of the planner's plan, which may not be what it runs (Q2_K_XL runs with images there).
   - The planner's log line notes "(images with the screen off)" for such models.
+- 2026-11-12 (lean.17): Home puts the chat first (built in its own session on `ui/home-overhaul`, `7dfb4be`; Steven
+  picked it from PC renders over a vitals strip and a console card).
+  - Right, two thirds: the Requests panel (text 24 px, the newest answer up to 14 lines, the newest question always
+    shown; header: answered, typical reply time, tokens in and out, failures in red only when any).
+  - Left rail (508 px): the model, its state and address; the speed at 96 px with its 2-minute trace (or the load's
+    cells); the memory bar with the screen's share; context; temperature, power, GPU busy and CPU use with 2-minute
+    trend lines; the fan as a bar; energy since start. Home's status bar leaves out temperature and watts.
+  - The vision warm-up no longer counts as an answered request (`stats.cpp`).
+  - Cost: the busiest Home frame draws about 1,340 shapes instead of 1,060 (about 27 KB more GPU instance buffer);
+    no fonts, textures or images.
