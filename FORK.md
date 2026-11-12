@@ -242,3 +242,24 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - Checked on the console as lean.20 (`c03e1f9`, installed over sched.1), screen off, Q2_K_XL v10: **1,792 / 1,819
     MiB when ready**, CPU heap 0.15 GiB; 1,376 / 1,620 after the warm-up (11.8 s); an `stt` of the saved live take
     came back word for word in 1,683 ms (whisper loaded in 696 ms), the largest block untouched at 1,376.
+- 2026-11-12 (lean.21): push-to-talk with chat history on Home (from the mic probe session and its chat UI
+  sub-session, branch `chat/for-ci-lean` `2866f28`, Steven's OK).
+  - Engine (`ps5/app/chat.cpp`, `chat_history.cpp` with a host test in the title check and CI): the conversation is
+    kept and sent as `messages`; the history takes at most half the context (always leaving 512 tokens) and the
+    reply gets the rest as `max_tokens`. Answers stream back through `activity.cpp`'s hooks (a chat request carries
+    `"user": "ps5lm-chat-<n>"`). Push-to-talk records at once; whisper base.en-q5_1 loads beside it on first use and
+    stays loaded, unloading after 10 idle minutes or when the screen goes. Muted and silent takes are skipped with a
+    note. A `chat` request file drives it from the PC (`docs/CONSOLE.md`).
+  - Screens (`dashboard.cpp`, from renders Steven approved): hold L2 to talk, the transcript goes into the box, R2
+    sends, Triangle types, Square twice starts a new chat; the panel has two views, Chat and Other devices.
+  - Tested on the TV as 0.11.0-lean.20-chat.2 (`32b2a83`, the same tree): transcripts in 1.4-1.7 s, sent and
+    answered; a follow-up ("How many people live there?") answered about Paris; a long code answer (5,673 bytes,
+    20.7 tokens a second) finished. Whisper (152 MiB) unloaded after 10 idle minutes and with the screen off, and
+    reloads in 71-700 ms. Screen on, Q2_K_XL with vision at 8k, whisper loaded: largest free block 602 MiB, 663-715
+    in all.
+  - **Standing setting changed (Steven, 2026-11-12 ~08:30): app-args v12 = v10 with `-c 8192`, and the screen
+    stays on** for chat. 8k costs about 380 MiB against 2k with the screen on (after the warm-up, largest 1,058 ->
+    602 MiB; 64 KiB a token in the 16 attention layers). v10 is the rollback.
+  - Not right yet: math shows as raw LaTeX, code lines lose their indentation, base.en is English only, and a stray
+    first word sometimes appears. Write-up: section 12 of `docs/handoffs/RESULT-ps5lm-mic-probe-20261111.md` in the
+    RenoIntel tree.
