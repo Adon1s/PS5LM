@@ -267,3 +267,24 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     on): 1,022 / 1,056 MiB when ready, 622 / 861 after the warm-up (11.7 s), CPU heap 0.17 GiB. From the PC (`chat
     say:`): "What is the capital of France?" answered "Paris", and the follow-up "How many people live there?"
     answered about Paris (4 turns kept, prompt ~122 tokens, reply room 8,038); the TV shows the conversation.
+- 2026-11-12 (lean.22): the planner counts lean.20's memory, and Home leaves the vision warm-up out (`9c4656d`,
+  Steven's OK).
+  - `ps5/app/model_plan.cpp`: the reserve beyond weights, cache and state is 0.35 GiB, not 0.8, and a causal vision
+    model (Qwen's) keeps 0.3 GiB for photos, not 0.5. The old figures held lean.20's 551 + 166 MiB of scheduler
+    memory. Fitted to the console's readings after the warm-up (the encoder's buffers at their largest; 25 photos
+    after it take no more), Qwen3.8-27B with its F16 projector, `-ub 256`, in largest-free-block terms: 0.84 GiB
+    (Q2_K_XL, 8k, screen on, lean.21), 0.85 (Q2_K_XL, 2k, screen off, lean.20), 0.85 (IQ3_XXS, 2k, screen off). The
+    planner now allows 0.97 for them, plus the checkpoint's state (0.15). Calibrated on Qwen 3.8 27B only.
+  - The planner on the console's own headers (PC run, Settings cache f16, 8k cap; screen on 11.79 GiB free, off
+    12.15): Q2_K_XL with images 8k f16, 11.5 of 11.8 GiB (was "text only, images need 11.9"); IQ2_S with images
+    10.5; IQ3_XXS text only, images need 12.3 GiB (4k f16), so not with the screen off either while the cache is
+    forced to f16. With the cache on automatic it reads "images with the screen off" (4k q4_0, 12.1 of 12.15).
+  - Home: the warm-up's tokens (1,337 in, 1 out, read from the server's `usage` in its reply,
+    `vision_warmup_finished`) are left out of "tokens in" and "out", and the context meter reads 0 until another
+    request begins (it showed the warm-up's image as 1,337 of the context).
+  - Checked on the console as lean.22 (`9c4656d`, installed over lean.21), standing setting (v12 8k, screen on): the
+    log's planner lines are the PC run's to the digit; the Models page shows them (Q2_K_XL "running with its own
+    settings"). Memory 1,022 / 1,056 MiB when ready (lean.21: 1,022 / 1,056), 720 / 849 after the warm-up (622 /
+    861). After the start Home read "0 answered, 0 tokens in, 0 out" and "Context 0 of 8k" (the warm-up logged
+    1,337 in, 1 out); after one chat message from the PC, "1 answered, 22 tokens in, 8 out" and "29 of 8k".
+    Screenshots: `D:\ps5lm-work\notes\ui-lean22\`.
