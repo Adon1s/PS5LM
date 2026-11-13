@@ -301,3 +301,10 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     Home shows v0.11.0-lean.23 and the chat; the planner's lines are lean.22's; 1,020 / 1,058 MiB when ready, 588 /
     849 after the warm-up (the largest block after the warm-up has read 588-726 across lean.22 starts). GitHub
     Actions run 43361928776 on `f44065d` passed (both jobs). Screenshots: `D:\ps5lm-work\notes\ui-lean23\`.
+- 2026-11-13 (lean.24): "PS5LM Voice" everywhere the app shows its name (Steven: "change the name to PS5LM Voice
+  everywhere").
+  - The header on every page and the start/restart screen read "PS5LM Voice"; the app's notifications and its help
+    text (storage, screen off) say "PS5LM Voice". The debug report keeps "# PS5LM debug report" (a test checks it).
+  - Home-screen artwork: the icon is the stacked logo with VOICE under it, the background has VOICE under the
+    horizontal logo, both in the logo's own outlined letters (`brand/voice_art.py`, from `brand/build.py`'s
+    functions; `ps5/app/sce_sys/source/*.svg`, `icon0.png`, `source/background.png`).

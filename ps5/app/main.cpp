@@ -660,7 +660,7 @@ void write_report(ReportJob job) {
                       usb.empty() ? "" : ("; saved to " + usb + "/PS5LM-debug-report.txt").c_str());
     }
     ps5lm::log_line("debug report: %s\n", status);
-    notify((std::string("PS5LM: debug report ") + (ok ? "saved to " + path : status)).c_str());
+    notify((std::string("PS5LM Voice: debug report ") + (ok ? "saved to " + path : status)).c_str());
     std::lock_guard<std::mutex> lock(g_report_mutex);
     g_report_status = status;
     g_report_busy = false;
@@ -860,7 +860,7 @@ struct Models {
         pthread_attr_setstacksize(&attr, 16u << 20);  // the console's default stack is small
         pthread_create(&server, &attr, run_server, nullptr);
         server_started = true;
-        notify("PS5LM: loading the model onto the GPU");
+        notify("PS5LM Voice: loading the model onto the GPU");
     }
 
     void stop() {
@@ -948,7 +948,7 @@ int main(int, char **) {
     // The first start without full storage asks on the screen what to do;
     // the notification is for a screen that does not come up.
     if (!full && storage_choice().empty()) {
-        notify(("PS5LM: full storage (/data) is closed to the app, so it keeps its files in its own storage. "
+        notify(("PS5LM Voice: full storage (/data) is closed to the app, so it keeps its files in its own storage. "
                 "On OnionHEN, add " + title + " to app_jailbreak.exact_title_ids in /data/OnionHEN/config.ini.").c_str());
     }
     // One device-local heap over the whole pool (RADV splits an APU's 2/3 to
@@ -1142,7 +1142,7 @@ int main(int, char **) {
                 worker_error = std::string("Cannot start RPC thread: ") + std::strerror(rc);
                 stopped = true;
             }
-            notify("PS5LM fleet: experimental unauthenticated RPC. Trusted isolated LAN only.");
+            notify("PS5LM Voice fleet: experimental unauthenticated RPC. Trusted isolated LAN only.");
         } else {
             std::printf("ps5lm-fleet: %s\n", worker_error.c_str());
             stopped = true;
@@ -1275,7 +1275,7 @@ int main(int, char **) {
         } else {
             stats.set_state(ServerState::no_model);
             if (models.rows.empty()) {
-                notify(("PS5LM: no models; copy a .gguf to " + g_files.models + " or PS5LM/models on a USB drive").c_str());
+                notify(("PS5LM Voice: no models; copy a .gguf to " + g_files.models + " or PS5LM/models on a USB drive").c_str());
             }
         }
         stats.set_phase("");
@@ -1378,17 +1378,17 @@ int main(int, char **) {
             if (live.state == ServerState::loading && projector && restart_at == 0) {
                 std::ofstream(g_files.choice) << models.running << "\n";
                 std::ofstream(g_files.text_only) << models.running << "\n";
-                notify("PS5LM: the image projector did not load; loading the model text only");
+                notify("PS5LM Voice: the image projector did not load; loading the model text only");
                 dash.set_busy("Loading " + base_name(models.running) + " text only",
                               "Its image projector did not load, see " + g_files.llama_log);
                 restart_at = n + 3;
             } else {
-                notify(("PS5LM: the server stopped, see " + g_files.llama_log).c_str());
+                notify(("PS5LM Voice: the server stopped, see " + g_files.llama_log).c_str());
             }
         }
         const bool serving = live.state == ServerState::ready || live.state == ServerState::generating;
         if (serving && !was_serving) {
-            notify(live.decision.empty() ? "PS5LM: ready, chat in a browser on this network" : "PS5LM: ready for decisions at /v1/systemone");
+            notify(live.decision.empty() ? "PS5LM: ready, chat in a browser on this network" : "PS5LM Voice: ready for decisions at /v1/systemone");
             log_memory("when ready");  // the weights, the cache and the compute buffers are all allocated by now
             // PS5LM Lean: the vision encoder's buffers sized once, at the cap (vision_warmup.hpp).
             if (!warmup_started) {
@@ -1500,7 +1500,7 @@ int main(int, char **) {
             const bool over = gib > models.settings.scratch_limit_gib;
             if (over && !scratch_warned) {
                 char text[128];
-                std::snprintf(text, sizeof(text), "PS5LM: the chat's scratch folder holds %.1f GiB; clear it in Settings", gib);
+                std::snprintf(text, sizeof(text), "PS5LM Voice: the chat's scratch folder holds %.1f GiB; clear it in Settings", gib);
                 notify(text);
                 ps5lm::log_line("%s\n", text + 7);
             }
@@ -1517,7 +1517,7 @@ int main(int, char **) {
             if (mv.saved != saved_seen) {
                 saved_seen = mv.saved;
                 models.rescan(stats, false);
-                notify(("PS5LM: " + mv.note).c_str());
+                notify(("PS5LM Voice: " + mv.note).c_str());
             }
             dash.set_market(std::move(mv));
         }
@@ -1767,7 +1767,7 @@ int main(int, char **) {
                 MarketJob job;
                 if (market.job(req.repo, req.file, req.path.empty() ? models.settings.download_dir : req.path, &job) &&
                     !market.enqueue(job, free_gib(job.dir))) {
-                    notify(("PS5LM: " + market.snapshot().note).c_str());
+                    notify(("PS5LM Voice: " + market.snapshot().note).c_str());
                 }
                 break;
             }
@@ -1781,7 +1781,7 @@ int main(int, char **) {
                     }
                 }
                 if (!market.enqueue(jobs, free_gib(dir))) {
-                    notify(("PS5LM: " + market.snapshot().note).c_str());
+                    notify(("PS5LM Voice: " + market.snapshot().note).c_str());
                 }
                 dash.show_downloads();
                 break;
@@ -1810,7 +1810,7 @@ int main(int, char **) {
                 std::filesystem::remove_all(e.path(), ec);
             }
             stats.set_scratch(folder_bytes(g_files.scratch) / 1073741824.0);
-            notify("PS5LM: scratch folder cleared");
+            notify("PS5LM Voice: scratch folder cleared");
             ps5lm::log_line("scratch folder cleared\n");
         }
         // Full storage closed: the app's own storage is the answer from now on,
@@ -1823,7 +1823,7 @@ int main(int, char **) {
                 std::ofstream(g_files.choice) << models.running << "\n";
             }
             ps5lm::log_line("restarting to ask for /data again\n");
-            dash.set_busy("Starting again", "PS5LM asks the HEN for full storage once more");
+            dash.set_busy("Starting again", "PS5LM Voice asks the HEN for full storage once more");
             restart_at = n + 3;
         }
         // A debug report, on a thread of its own: the ports and the kernel log

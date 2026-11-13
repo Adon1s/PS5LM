@@ -151,7 +151,7 @@ constexpr SettingCategory kCategories[] = {
     { "Sound and storage",
       { { Setting::sounds, "Sounds", "Interface sounds on the TV" },
         { Setting::download_dir, "Save downloads to", "Internal storage, or PS5LM/models on an M.2 or USB drive" },
-        { Setting::storage, "Where PS5LM keeps its files", "Full storage, or its own while the HEN keeps /data closed" } },
+        { Setting::storage, "Where PS5LM Voice keeps its files", "Full storage, or its own while the HEN keeps /data closed" } },
       3 },
     { "Developer",
       { { Setting::introspect, "Logits and activations API",
@@ -1421,7 +1421,8 @@ void Dashboard::draw_status(gfx::DrawList & l) const {
     const ui::Fonts & f = fonts_;
     const float y = 72;
     float w = put(l, f.semibold, "PS5", kLeft, y, 28, kInk);
-    put(l, f.semibold, "LM", kLeft + w, y, 28, kBlue);
+    w += put(l, f.semibold, "LM", kLeft + w, y, 28, kBlue);
+    put(l, f.semibold, " Voice", kLeft + w, y, 28, kInk);  // PS5LM Voice (lean.24)
     // Right to left: how long it has been up, power, temperature. PS5LM Lean:
     // Home shows the last two with the other readings.
     std::vector<std::string> items;
@@ -2876,7 +2877,7 @@ void Dashboard::draw_settings(gfx::DrawList & l) const {
         draw_memory(l, x, y, w);
         y += 120;
         const char * lines[] = {
-            "With the screen off, the TV shows the PS5LM picture and the server keeps answering on your network.",
+            "With the screen off, the TV shows the PS5LM Voice picture and the server keeps answering on your network.",
             "It stays off when the app starts again, until you bring it back:",
         };
         for (const char * line : lines) {
@@ -3045,8 +3046,8 @@ void Dashboard::draw_storage_dialog(gfx::DrawList & l) const {
     };
     std::vector<ui::Hint> h;
     if (!storage_howto_) {
-        put(l, f.semibold, "Full storage is closed to PS5LM", r.x + 56, r.y + 86, 34, kInk);
-        para("The HEN did not open the console's storage (/data) to the app, so PS5LM cannot keep its models, "
+        put(l, f.semibold, "Full storage is closed to PS5LM Voice", r.x + 56, r.y + 86, 34, kInk);
+        para("The HEN did not open the console's storage (/data) to the app, so PS5LM Voice cannot keep its models, "
              "settings and logs there.", kInk2);
         para("It can use its own storage instead: up to " + format("%.0f GB", app_storage_gib_) +
              ", enough for one large model or a few small ones. Downloads that do not fit are refused before they start.",
@@ -3055,13 +3056,13 @@ void Dashboard::draw_storage_dialog(gfx::DrawList & l) const {
         h = { { ui::Button::circle, "Not now" }, { ui::Button::triangle, "How to open it" },
               { ui::Button::cross, "Use the app's storage" } };
     } else {
-        put(l, f.semibold, "Open full storage to PS5LM", r.x + 56, r.y + 86, 34, kInk);
+        put(l, f.semibold, "Open full storage to PS5LM Voice", r.x + 56, r.y + 86, 34, kInk);
         static const std::string title = title_id();  // read once: this sheet redraws every frame
         para("OnionHEN: over FTP, add " + title + " to exact_title_ids in the [app_jailbreak] section of "
              "/data/OnionHEN/config.ini.", kInk2);
         para("etaHEN opens /data to homebrew before it starts; if it did not, load etaHEN again, up to date.", kInk2);
         para("Other HENs: allow " + title + " in their app jailbreak list.", kInk2);
-        para("Then start PS5LM again: it asks the HEN for /data at every start.", kInk3);
+        para("Then start PS5LM Voice again: it asks the HEN for /data at every start.", kInk3);
         h = { { ui::Button::circle, "Back" }, { ui::Button::cross, "Start again" } };
     }
     ui::GlyphStyle style = ui::GlyphStyle::dark();
@@ -3081,7 +3082,7 @@ void Dashboard::draw_report_dialog(gfx::DrawList & l) const {
     put(l, f.semibold, "What a debug report holds", r.x + 56, r.y + 86, 34, kInk);
     const char * items[] = {
         "The app's version and the console's system software",
-        "Where PS5LM keeps its files, the drives and their free space",
+        "Where PS5LM Voice keeps its files, the drives and their free space",
         "The models on this PS5, their plans, and the downloads",
         "Your settings and the server's arguments",
         "The last 256 KiB of app.log and of llama.log",
@@ -3119,10 +3120,12 @@ void Dashboard::draw_report_dialog(gfx::DrawList & l) const {
 void Dashboard::draw_busy(gfx::DrawList & l) const {
     const ui::Fonts & f = fonts_;
     l.rounded_rect({ 0, 0, 1920, 1080 }, 0, kBase);
-    const float ps5 = f.semibold.measure("PS5", 120), lm = f.semibold.measure("LM", 120);
-    const float x = 960 - (ps5 + lm) * 0.5f;
+    const float ps5 = f.semibold.measure("PS5", 120), lm = f.semibold.measure("LM", 120),
+                voice = f.semibold.measure(" Voice", 120);
+    const float x = 960 - (ps5 + lm + voice) * 0.5f;
     put(l, f.semibold, "PS5", x, 500, 120, kInk);
     put(l, f.semibold, "LM", x + ps5, 500, 120, kBlue);
+    put(l, f.semibold, " Voice", x + ps5 + lm, 500, 120, kInk);
     put(l, f.regular, f.regular.font->fit(busy_title_, 32, 1400), 960, 600, 32, kInk, gfx::Align::center);
     put(l, f.regular, f.regular.font->fit(busy_text_, 24, 1400), 960, 646, 24, kInk2, gfx::Align::center);
     const float track = 360, seg = 96;
@@ -3306,7 +3309,7 @@ void Dashboard::draw_screen_question(gfx::DrawList & l) const {
         para("The screen holds " + screen_mb() + " of this PS5's " + gb(live_.pool_gib) +
                  ". With it off, the model gets that memory.", kInk2);
     }
-    para("The TV shows the PS5LM picture. The server keeps answering " + where + ".", kInk2);
+    para("The TV shows the PS5LM Voice picture. The server keeps answering " + where + ".", kInk2);
     wake_line(l, r.x + 56, y, 24, kInk, false);
     y += 52;
     put(l, f.regular, "It stays off when the app starts again.", r.x + 56, y, 22, kInk3);
