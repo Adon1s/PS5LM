@@ -308,3 +308,8 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - Home-screen artwork: the icon is the stacked logo with VOICE under it, the background has VOICE under the
     horizontal logo, both in the logo's own outlined letters (`brand/voice_art.py`, from `brand/build.py`'s
     functions; `ps5/app/sce_sys/source/*.svg`, `icon0.png`, `source/background.png`).
+  - Checked on the console as lean.24 (`2f6620d`, installed over lean.23), standing setting (v12 8k, screen on): the
+    header reads "PS5LM Voice", v0.11.0-lean.24; 1,022 / 1,056 MiB when ready, 590 / 849 after the warm-up. Actions
+    run 43437369609 passed. Screenshots: `D:\ps5lm-work\notes\ui-lean24\`.
+- 2026-11-13: README screenshots of PS5LM Voice on the console (`docs/media/voice/`, from the fork-publish session,
+  `3c7686e`, Steven's OK; LAN addresses blurred).
