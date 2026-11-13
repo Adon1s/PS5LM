@@ -297,3 +297,7 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
   - `.github/workflows/release.yml`: a tag `v<version>` (it must match `version.hpp`) builds through
     `native-build.yml` (which now also takes `workflow_call`), checks `eboot.bin` against `result.json`, and attaches
     `ps5lm-voice-<version>.zip`, its `.sha256` and `result.json` to a draft release. Nothing publishes it.
+  - Checked on the console as lean.23 (`f44065d`, installed over lean.22), standing setting (v12 8k, screen on):
+    Home shows v0.11.0-lean.23 and the chat; the planner's lines are lean.22's; 1,020 / 1,058 MiB when ready, 588 /
+    849 after the warm-up (the largest block after the warm-up has read 588-726 across lean.22 starts). GitHub
+    Actions run 43361928776 on `f44065d` passed (both jobs). Screenshots: `D:\ps5lm-work\notes\ui-lean23\`.
