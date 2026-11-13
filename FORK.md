@@ -1,4 +1,4 @@
-# PS5LM Lean
+# PS5LM Voice
 
 A modified copy of [cobanov/PS5LM](https://github.com/cobanov/PS5LM) (GPL-3.0), forked from v0.11.0
 (`e2a8cf4`, 2026-11-09). It installs beside the stock app under its own title ID, **PPSA99590**, and shares
@@ -288,3 +288,12 @@ PPSA99590 to `app_jailbreak.exact_title_ids` as for the stock app.
     861). After the start Home read "0 answered, 0 tokens in, 0 out" and "Context 0 of 8k" (the warm-up logged
     1,337 in, 1 out); after one chat message from the PC, "1 answered, 22 tokens in, 8 out" and "29 of 8k".
     Screenshots: `D:\ps5lm-work\notes\ui-lean22\`.
+- 2026-11-12 (lean.23): the app is called **PS5LM Voice** (Steven's choice; it was PS5LM Lean), and the fork gets a
+  README and a draft-release workflow (from the fork-publish session, `ae62e72`, Steven's OK).
+  - `ps5/app/sce_sys/param.json`: titleName "PS5LM Voice". The title ID (**PPSA99590**) and content ID stay as they
+    are, so it still installs beside stock PS5LM and over lean.22, with the same data folder. The app's own
+    notifications say "PS5LM Voice:" too; the on-screen "PS5LM" header and the CI step names are unchanged.
+  - `README.md`: what the fork adds, how to install it, the controls and its limits, for PS5LM Voice.
+  - `.github/workflows/release.yml`: a tag `v<version>` (it must match `version.hpp`) builds through
+    `native-build.yml` (which now also takes `workflow_call`), checks `eboot.bin` against `result.json`, and attaches
+    `ps5lm-voice-<version>.zip`, its `.sha256` and `result.json` to a draft release. Nothing publishes it.

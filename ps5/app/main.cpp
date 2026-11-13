@@ -1095,14 +1095,14 @@ int main(int, char **) {
     // PS5LM Lean: a screen that failed to open keeps the splash too.
     char screen_note[256];
     std::snprintf(screen_note, sizeof(screen_note),
-                  "PS5LM Lean: screen off, saving %.0f MB for the model. The server answers on port %d. "
+                  "PS5LM Voice: screen off, saving %.0f MB for the model. The server answers on port %d. "
                   "Hold Triangle for 2 seconds to turn the screen on.",
                   std::round(screen_cost_gib * 1024.0 / 10.0) * 10.0, kPort);
     if (screen_up) {
         sceSystemServiceHideSplashScreen();
         splash_hidden = true;
     } else if (screen_on) {
-        notify("PS5LM Lean: the screen did not open. The server answers on port 8081; app.log says why.");
+        notify("PS5LM Voice: the screen did not open. The server answers on port 8081; app.log says why.");
     } else {
         notify(screen_note);
     }
@@ -1644,13 +1644,13 @@ int main(int, char **) {
         const bool want_screen = wake || wake_any || open_now || wake_pending;
         if (restart_on && restart_at == 0 && !screen_up) {
             restart_with_screen("on");
-            notify("PS5LM Lean: bringing the screen back; the model loads again");
+            notify("PS5LM Voice: bringing the screen back; the model loads again");
             restart_at = n + 1;
         } else if (want_screen && restart_at == 0 && !screen_up) {
             if (live.state == ServerState::loading) {
                 // The load takes the memory the screen would need: after it.
                 if (!wake_pending) {
-                    notify("PS5LM Lean: the screen comes back once the model is ready");
+                    notify("PS5LM Voice: the screen comes back once the model is ready");
                     ps5lm::log_line("screen on: waiting for the model to be ready\n");
                 }
                 wake_pending = true;
@@ -1660,12 +1660,12 @@ int main(int, char **) {
                 if (!open_in_place(wake_any ? "a button" : wake ? "Triangle" : open_now ? "the PC" : "after the load")) {
                     if (deliberate) {
                         restart_with_screen("on");
-                        notify("PS5LM Lean: bringing the screen back; the model loads again");
+                        notify("PS5LM Voice: bringing the screen back; the model loads again");
                         restart_at = n + 1;
                     } else if (hint_at == 0 || now - hint_at >= 20000000) {
                         // A stray press never reloads the model.
                         hint_at = now;
-                        notify("PS5LM Lean: too little memory is free to wake the screen now. Hold Triangle for 2 "
+                        notify("PS5LM Voice: too little memory is free to wake the screen now. Hold Triangle for 2 "
                                "seconds to restart the app with it.");
                     }
                 }
@@ -1693,7 +1693,7 @@ int main(int, char **) {
             if (screen_asleep) {
                 char text[200];
                 std::snprintf(text, sizeof(text),
-                              "PS5LM Lean: the screen is asleep, giving the model %.0f MB. Press any button to wake it.",
+                              "PS5LM Voice: the screen is asleep, giving the model %.0f MB. Press any button to wake it.",
                               std::round(screen_cost_gib * 1024.0 / 10.0) * 10.0);
                 notify(text);
             } else {
