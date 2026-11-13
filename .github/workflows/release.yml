@@ -1,0 +1,77 @@
+name: Release (draft)
+# Pushing a tag v<version> builds the title the way CI does and attaches
+# ps5lm-voice-<version>.zip (the title folder, as upstream ships PPSA99575),
+# its .sha256 and the build's result.json to a DRAFT release. A person checks
+# the draft, installs it once and publishes it; nothing here publishes.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    # The same host checks and PS5 title build as every push to ci/**.
+    uses: ./.github/workflows/native-build.yml
+
+  draft:
+    name: Package the title and draft the release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: The tag must match the app's version
+        id: meta
+        run: |
+          version=$(sed -n 's/^#define PS5LM_VERSION "\(.*\)"$/\1/p' ps5/app/version.hpp)
+          title_id=$(python3 -c 'import json; print(json.load(open("ps5/app/sce_sys/param.json"))["titleId"])')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match version.hpp ($version); tag v$version instead" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "title_id=$title_id" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ps5lm-title-${{ github.sha }}
+          path: built
+      - name: Zip the title folder and its checksum
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TITLE_ID: ${{ steps.meta.outputs.title_id }}
+        run: |
+          set -euo pipefail
+          title=built/app-ps5/title/$TITLE_ID
+          test -f "$title/eboot.bin"
+          # The zip must hold exactly what CI built: compare eboot.bin with result.json.
+          want=$(python3 -c 'import json,sys; print(json.load(open("built/native-ci/result.json"))["files_sha256"]["eboot.bin"])')
+          have=$(sha256sum "$title/eboot.bin" | cut -d' ' -f1)
+          [ "$want" = "$have" ] || { echo "eboot.bin does not match result.json" >&2; exit 1; }
+          mkdir dist
+          zip="ps5lm-voice-$VERSION.zip"
+          (cd built/app-ps5/title && zip -qrX "../../../dist/$zip" "$TITLE_ID")
+          (cd dist && sha256sum "$zip" > "$zip.sha256")
+          cp built/native-ci/result.json "dist/result-$VERSION.json"
+          unzip -l "dist/$zip" | tail -1
+          cat "dist/$zip.sha256"
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="docs/release-notes/v$VERSION.md"
+          if [ ! -f "$notes" ]; then
+            notes=$(mktemp)
+            printf '%s\n' "PS5LM Voice $VERSION. What changed since PS5LM v0.11.0, measured: [FORK.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/FORK.md)." \
+              "" "Install: unzip, copy the title folder to /data/homebrew. Check the zip against its .sha256 first." > "$notes"
+          fi
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "PS5LM Voice $VERSION" --notes-file "$notes" dist/*
