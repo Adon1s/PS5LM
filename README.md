@@ -18,7 +18,17 @@
   <a href="https://github.com/Adon1s/PS5LM-Voice/issues">Issues</a>
 </p>
 
-<!-- Screenshots go here once Steven has approved them (docs/media/voice/). -->
+<p align="center">
+  <img src="docs/media/voice/01-home-chat.png" width="100%" alt="Home: a chat with Qwen 3.8 27B on the TV, with the model, speed, memory and the console's readings on the left">
+  <br><sub>Home on a PS5 Slim: Qwen 3.8 27B remembers the conversation. Hold L2 to talk, R2 to send.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/voice/02-home-other-devices.png" width="49%" alt="Home, Other devices: a request from a PC on the network and its answer">
+  <img src="docs/media/voice/03-models.png" width="49%" alt="Models: what fits, with images or text only">
+  <img src="docs/media/voice/04-settings.png" width="49%" alt="Settings, Screen and memory: turn the screen off, sleep timer, memory bar">
+  <br><sub>Requests from other devices, the Models page and Settings > Screen and memory.</sub>
+</p>
 
 PS5LM Voice is [cobanov/PS5LM](https://github.com/cobanov/PS5LM) (GPL-3.0) with changes aimed at using the model on
 the console itself, not only from other devices. Hold L2 on the DualSense and speak, let go, and press R2: the
